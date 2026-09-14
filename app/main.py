@@ -167,7 +167,12 @@ def get_family_slot(member: Member, relationship_type: str):
 
 
 async def upsert_family_slot(db: Session, member: Member, relationship_type: str, full_name: str, birth_date: str, photo: Optional[UploadFile]):
-    current = get_family_slot(member, relationship_type)
+    # Consulta directamente la tabla para evitar depender del caché de la relación
+    # SQLAlchemy cuando se agregan varios familiares en una misma petición.
+    current = db.query(FamilyMember).filter(
+        FamilyMember.member_id == member.id,
+        FamilyMember.relationship_type == relationship_type,
+    ).first()
     name = (full_name or "").strip()
     if not name:
         if current:
@@ -323,9 +328,15 @@ def member_detail(member_id: int, request: Request, db: Session = Depends(get_db
     require_admin(request, db)
     m = db.get(Member, member_id)
     if not m: raise HTTPException(404)
+    family = db.query(FamilyMember).filter(
+        FamilyMember.member_id == m.id, FamilyMember.active == True
+    ).order_by(FamilyMember.id).all()
+    family_by_type = {f.relationship_type: f for f in family}
     return templates.TemplateResponse("member_detail.html", {
         "request": request, "m": m, "status": member_status(m), "latest": latest_membership(m),
-        "pool": pool_status(m), "family_slot": get_family_slot
+        "pool": pool_status(m), "family_slot": get_family_slot,
+        "family": family, "family_by_type": family_by_type,
+        "family_saved": request.query_params.get("familia") == "guardada",
     })
 
 
@@ -370,7 +381,7 @@ async def update_family(member_id: int, request: Request,
     await upsert_family_slot(db, m, "Hijo 3", child3_name, child3_birth_date, child3_photo)
     await upsert_family_slot(db, m, "Hijo 4", child4_name, child4_birth_date, child4_photo)
     db.commit()
-    return RedirectResponse(f"/admin/socios/{m.id}", 303)
+    return RedirectResponse(f"/admin/socios/{m.id}?familia=guardada", 303)
 
 
 @app.post("/admin/socios/{member_id}/membresia")

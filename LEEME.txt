@@ -1,0 +1,15 @@
+CORRECCION FAMILIA - Club de Leones de Sabinas
+
+Reemplaza estos 3 archivos en el repositorio manteniendo sus rutas:
+- app/main.py
+- app/templates/member_detail.html
+- app/static/style-v2.css
+
+Cambios:
+- Consulta directa a PostgreSQL para esposa e hijos.
+- Confirmacion visual al guardar familia.
+- Seccion visible "Familia registrada" con nombre, parentesco, fecha y foto.
+- Formulario de edicion separado de la visualizacion.
+
+No borra socios, pagos, membresias ni familiares existentes.
+Render desplegara automaticamente al hacer commit.
