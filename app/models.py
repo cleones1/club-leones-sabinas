@@ -3,6 +3,7 @@ from sqlalchemy.orm import relationship
 from datetime import datetime
 from .database import Base
 
+
 class Member(Base):
     __tablename__ = "members"
     id = Column(Integer, primary_key=True)
@@ -22,6 +23,32 @@ class Member(Base):
     memberships = relationship("Membership", back_populates="member", cascade="all, delete-orphan")
     payments = relationship("Payment", back_populates="member", cascade="all, delete-orphan")
     user = relationship("User", back_populates="member", uselist=False, cascade="all, delete-orphan")
+    photo = relationship("MemberPhoto", back_populates="member", uselist=False, cascade="all, delete-orphan")
+    family_members = relationship("FamilyMember", back_populates="member", cascade="all, delete-orphan", order_by="FamilyMember.id")
+    pool_passes = relationship("PoolPass", back_populates="member", cascade="all, delete-orphan")
+
+
+class MemberPhoto(Base):
+    __tablename__ = "member_photos"
+    id = Column(Integer, primary_key=True)
+    member_id = Column(Integer, ForeignKey("members.id"), unique=True, nullable=False)
+    data = Column(Text, nullable=False)
+    member = relationship("Member", back_populates="photo")
+
+
+class FamilyMember(Base):
+    __tablename__ = "family_members"
+    id = Column(Integer, primary_key=True)
+    member_id = Column(Integer, ForeignKey("members.id"), nullable=False, index=True)
+    relationship_type = Column(String(40), nullable=False)
+    full_name = Column(String(180), nullable=False)
+    birth_date = Column(Date, nullable=True)
+    photo_data = Column(Text, default="")
+    qr_token = Column(String(80), unique=True, index=True, nullable=False)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    member = relationship("Member", back_populates="family_members")
+
 
 class Membership(Base):
     __tablename__ = "memberships"
@@ -34,6 +61,7 @@ class Membership(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     member = relationship("Member", back_populates="memberships")
 
+
 class Payment(Base):
     __tablename__ = "payments"
     id = Column(Integer, primary_key=True)
@@ -45,6 +73,22 @@ class Payment(Base):
     reference = Column(String(120), default="")
     paid_at = Column(DateTime, default=datetime.utcnow)
     member = relationship("Member", back_populates="payments")
+    pool_pass = relationship("PoolPass", back_populates="payment", uselist=False)
+
+
+class PoolPass(Base):
+    __tablename__ = "pool_passes"
+    id = Column(Integer, primary_key=True)
+    member_id = Column(Integer, ForeignKey("members.id"), nullable=False, index=True)
+    payment_id = Column(Integer, ForeignKey("payments.id"), nullable=True, unique=True)
+    plan_type = Column(String(20), nullable=False)  # Mensual / Anual
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    amount = Column(Float, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    member = relationship("Member", back_populates="pool_passes")
+    payment = relationship("Payment", back_populates="pool_pass")
+
 
 class User(Base):
     __tablename__ = "users"

@@ -1,0 +1,3 @@
+{% extends "base.html" %}{% block title %}Validación alberca · Club de Leones de Sabinas{% endblock %}{% block content %}
+<div class="verify card"><h1>Acceso de alberca</h1>{% if valid %}<div class="verify-icon">✓</div><h2>Credencial vigente</h2><p><b>{{person_name}}</b><br>{{relation}} · Socio {{m.member_number}}</p><span class="badge {{pool_status[1]}}">{{pool_status[0]}}</span>{% if pool_pass %}<p>{{pool_pass.plan_type}} · válida hasta <b>{{pool_pass.end_date.strftime('%d/%m/%Y')}}</b></p>{% endif %}{% else %}<div class="verify-icon danger">×</div><h2>Acceso no vigente</h2>{% if person_name %}<p><b>{{person_name}}</b><br>{{relation}}</p>{% endif %}<p>Solicite validación en administración.</p>{% endif %}</div>
+{% endblock %}
