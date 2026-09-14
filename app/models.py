@@ -1,0 +1,57 @@
+from sqlalchemy import Column, Integer, String, Date, DateTime, Float, ForeignKey, Boolean, Text
+from sqlalchemy.orm import relationship
+from datetime import datetime
+from .database import Base
+
+class Member(Base):
+    __tablename__ = "members"
+    id = Column(Integer, primary_key=True)
+    member_number = Column(String(30), unique=True, index=True, nullable=False)
+    first_name = Column(String(100), nullable=False)
+    last_name = Column(String(160), nullable=False)
+    email = Column(String(180), unique=True, index=True, nullable=False)
+    phone = Column(String(40), default="")
+    birth_date = Column(Date, nullable=True)
+    address = Column(Text, default="")
+    emergency_contact = Column(String(180), default="")
+    notes = Column(Text, default="")
+    photo_url = Column(String(500), default="")
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    qr_token = Column(String(80), unique=True, index=True, nullable=False)
+    memberships = relationship("Membership", back_populates="member", cascade="all, delete-orphan")
+    payments = relationship("Payment", back_populates="member", cascade="all, delete-orphan")
+    user = relationship("User", back_populates="member", uselist=False, cascade="all, delete-orphan")
+
+class Membership(Base):
+    __tablename__ = "memberships"
+    id = Column(Integer, primary_key=True)
+    member_id = Column(Integer, ForeignKey("members.id"), nullable=False)
+    membership_type = Column(String(100), nullable=False)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    amount = Column(Float, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    member = relationship("Member", back_populates="memberships")
+
+class Payment(Base):
+    __tablename__ = "payments"
+    id = Column(Integer, primary_key=True)
+    member_id = Column(Integer, ForeignKey("members.id"), nullable=False)
+    folio = Column(String(40), unique=True, index=True, nullable=False)
+    concept = Column(String(160), nullable=False)
+    amount = Column(Float, nullable=False)
+    method = Column(String(60), nullable=False)
+    reference = Column(String(120), default="")
+    paid_at = Column(DateTime, default=datetime.utcnow)
+    member = relationship("Member", back_populates="payments")
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True)
+    email = Column(String(180), unique=True, index=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    role = Column(String(20), nullable=False, default="member")
+    member_id = Column(Integer, ForeignKey("members.id"), nullable=True)
+    active = Column(Boolean, default=True)
+    member = relationship("Member", back_populates="user")
