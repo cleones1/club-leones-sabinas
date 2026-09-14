@@ -17,7 +17,7 @@ from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 
 from .database import Base, engine, get_db, SessionLocal
-from .models import Member, MemberPhoto, FamilyMember, Membership, Payment, PoolPass, User
+from .models import Member, MemberPhoto, FamilyMember, Membership, Payment, PoolPass, ClubSetting, MonthlyCharge, ManualDebt, DebtPaymentAllocation, User
 from .auth import hash_password, verify_password
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -79,6 +79,104 @@ def pool_status(member: Member):
         return "Por vencer", "warning", p
     return "Activo", "success", p
 
+
+
+SPANISH_MONTHS = ("", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre")
+
+
+def monthly_fee_amount(db: Session):
+    row = db.query(ClubSetting).filter(ClubSetting.key == "monthly_fee_amount").first()
+    try:
+        return round(float(row.value), 2) if row else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def set_monthly_fee_amount(db: Session, amount: float):
+    row = db.query(ClubSetting).filter(ClubSetting.key == "monthly_fee_amount").first()
+    if not row:
+        row = ClubSetting(key="monthly_fee_amount", value=f"{amount:.2f}")
+        db.add(row)
+    else:
+        row.value = f"{amount:.2f}"
+    return row
+
+
+def monthly_due_date(year: int, month: int):
+    # El socio puede liquidar hasta el día 30 inclusive. En febrero se usa
+    # el último día disponible y el recargo se activa al día siguiente.
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, min(30, last_day))
+
+
+def monthly_charge_total(charge: MonthlyCharge):
+    return round((charge.base_amount or 0) + (charge.late_fee or 0), 2)
+
+
+def monthly_charge_balance(charge: MonthlyCharge):
+    return max(0.0, round(monthly_charge_total(charge) - (charge.paid_amount or 0), 2))
+
+
+def manual_debt_balance(debt: ManualDebt):
+    return max(0.0, round((debt.amount or 0) - (debt.paid_amount or 0), 2))
+
+
+def member_debt_total(db: Session, member_id: int):
+    monthly = db.query(MonthlyCharge).filter(MonthlyCharge.member_id == member_id).all()
+    manual = db.query(ManualDebt).filter(ManualDebt.member_id == member_id).all()
+    return round(sum(monthly_charge_balance(c) for c in monthly) + sum(manual_debt_balance(d) for d in manual), 2)
+
+
+def ensure_monthly_charges(db: Session, target_day: date | None = None, update_current_amount: bool = False):
+    target_day = target_day or date.today()
+    amount = monthly_fee_amount(db)
+    period = f"{target_day.year:04d}-{target_day.month:02d}"
+    due = monthly_due_date(target_day.year, target_day.month)
+    members = db.query(Member).all()  # La mensualidad se carga a todos los socios registrados.
+    existing = {c.member_id: c for c in db.query(MonthlyCharge).filter(MonthlyCharge.period == period).all()}
+    changed = False
+    for member in members:
+        charge = existing.get(member.id)
+        if not charge and amount > 0:
+            db.add(MonthlyCharge(member_id=member.id, period=period, base_amount=amount, late_fee=0, paid_amount=0, due_date=due))
+            changed = True
+        elif charge and update_current_amount and (charge.paid_amount or 0) == 0:
+            if round(charge.base_amount or 0, 2) != round(amount, 2):
+                charge.base_amount = amount
+                # Si todavía no está vencida, cualquier recargo previo se limpia.
+                if target_day <= charge.due_date:
+                    charge.late_fee = 0
+                changed = True
+    return changed
+
+
+def refresh_late_fees(db: Session, target_day: date | None = None):
+    target_day = target_day or date.today()
+    changed = False
+    charges = db.query(MonthlyCharge).all()
+    for charge in charges:
+        # Si al terminar el día 30 no está liquidada, se carga 10% de la mensualidad base.
+        base_pending = round((charge.base_amount or 0) - (charge.paid_amount or 0), 2)
+        if target_day > charge.due_date and base_pending > 0 and (charge.late_fee or 0) == 0:
+            charge.late_fee = round((charge.base_amount or 0) * 0.10, 2)
+            changed = True
+    return changed
+
+
+def sync_finances(db: Session, update_current_amount: bool = False):
+    changed = ensure_monthly_charges(db, update_current_amount=update_current_amount)
+    changed = refresh_late_fees(db) or changed
+    if changed:
+        db.commit()
+    return changed
+
+
+def period_label(period: str):
+    try:
+        y, m = [int(x) for x in period.split("-")]
+        return f"{SPANISH_MONTHS[m]} {y}"
+    except Exception:
+        return period
 
 def auth_user(request: Request, db: Session):
     uid = request.session.get("user_id")
@@ -264,18 +362,23 @@ def logout(request: Request):
 @app.get("/admin", response_class=HTMLResponse)
 def admin_dashboard(request: Request, db: Session = Depends(get_db)):
     require_admin(request, db)
+    sync_finances(db)
     members = db.query(Member).order_by(Member.created_at.desc()).all()
     active = expiring = expired = 0
+    debt_map = {}
     for m in members:
-        s, _ = member_status(m)
-        if s == "Activo": active += 1
-        elif s == "Por vencer": expiring += 1
-        elif s == "Vencido": expired += 1
+        st, _ = member_status(m)
+        if st == "Activo": active += 1
+        elif st == "Por vencer": expiring += 1
+        elif st == "Vencido": expired += 1
+        debt_map[m.id] = member_debt_total(db, m.id)
     month_start = date.today().replace(day=1)
     income = db.query(func.coalesce(func.sum(Payment.amount),0)).filter(Payment.paid_at >= datetime.combine(month_start, datetime.min.time())).scalar()
+    total_debt = round(sum(debt_map.values()), 2)
     return templates.TemplateResponse("admin_dashboard.html", {
         "request": request, "members": members, "status_fn": member_status, "latest_fn": latest_membership,
-        "total": len(members), "active": active, "expiring": expiring, "expired": expired, "income": income
+        "total": len(members), "active": active, "expiring": expiring, "expired": expired, "income": income,
+        "debt_map": debt_map, "total_debt": total_debt, "monthly_fee": monthly_fee_amount(db)
     })
 
 
@@ -319,6 +422,11 @@ async def create_member(
     await upsert_family_slot(db, m, "Hijo 2", child2_name, child2_birth_date, child2_photo)
     await upsert_family_slot(db, m, "Hijo 3", child3_name, child3_birth_date, child3_photo)
     await upsert_family_slot(db, m, "Hijo 4", child4_name, child4_birth_date, child4_photo)
+    # Si ya existe una mensualidad configurada, el socio nuevo recibe el cargo del mes actual.
+    current_fee = monthly_fee_amount(db)
+    if current_fee > 0:
+        today = date.today()
+        db.add(MonthlyCharge(member_id=m.id, period=f"{today.year:04d}-{today.month:02d}", base_amount=current_fee, late_fee=0, paid_amount=0, due_date=monthly_due_date(today.year, today.month)))
     db.commit()
     return RedirectResponse(f"/admin/socios/{m.id}", 303)
 
@@ -326,6 +434,7 @@ async def create_member(
 @app.get("/admin/socios/{member_id}", response_class=HTMLResponse)
 def member_detail(member_id: int, request: Request, db: Session = Depends(get_db)):
     require_admin(request, db)
+    sync_finances(db)
     m = db.get(Member, member_id)
     if not m: raise HTTPException(404)
     family = db.query(FamilyMember).filter(
@@ -337,6 +446,7 @@ def member_detail(member_id: int, request: Request, db: Session = Depends(get_db
         "pool": pool_status(m), "family_slot": get_family_slot,
         "family": family, "family_by_type": family_by_type,
         "family_saved": request.query_params.get("familia") == "guardada",
+        "debt_total": member_debt_total(db, m.id),
     })
 
 
@@ -425,8 +535,125 @@ def toggle_member(member_id: int, request: Request, db: Session = Depends(get_db
 @app.get("/mi-cuenta", response_class=HTMLResponse)
 def my_account(request: Request, db: Session = Depends(get_db)):
     u = require_member(request, db)
+    sync_finances(db)
     m = u.member
-    return templates.TemplateResponse("member_portal.html", {"request": request, "m": m, "status": member_status(m), "latest": latest_membership(m), "pool": pool_status(m)})
+    return templates.TemplateResponse("member_portal.html", {"request": request, "m": m, "status": member_status(m), "latest": latest_membership(m), "pool": pool_status(m), "debt_total": member_debt_total(db, m.id)})
+
+
+@app.get("/admin/finanzas", response_class=HTMLResponse)
+def finance_dashboard(request: Request, db: Session = Depends(get_db)):
+    require_admin(request, db)
+    sync_finances(db)
+    members = db.query(Member).order_by(Member.last_name, Member.first_name).all()
+    debtors = []
+    total_debt = 0.0
+    for member in members:
+        balance = member_debt_total(db, member.id)
+        if balance > 0:
+            debtors.append((member, balance))
+            total_debt += balance
+    today = date.today()
+    return templates.TemplateResponse("finance_dashboard.html", {
+        "request": request, "monthly_fee": monthly_fee_amount(db), "debtors": debtors,
+        "total_debt": round(total_debt, 2), "period": f"{SPANISH_MONTHS[today.month]} {today.year}",
+        "saved": request.query_params.get("guardado") == "1",
+    })
+
+
+@app.post("/admin/finanzas/mensualidad")
+def update_monthly_fee(request: Request, amount: float = Form(...), db: Session = Depends(get_db)):
+    require_admin(request, db)
+    amount = round(max(0.0, amount), 2)
+    set_monthly_fee_amount(db, amount)
+    db.commit()
+    sync_finances(db, update_current_amount=True)
+    return RedirectResponse("/admin/finanzas?guardado=1", 303)
+
+
+@app.post("/admin/finanzas/generar")
+def generate_monthly_fees(request: Request, db: Session = Depends(get_db)):
+    require_admin(request, db)
+    sync_finances(db)
+    return RedirectResponse("/admin/finanzas", 303)
+
+
+@app.get("/admin/socios/{member_id}/adeudo", response_class=HTMLResponse)
+def member_debt_page(member_id: int, request: Request, db: Session = Depends(get_db)):
+    require_admin(request, db)
+    sync_finances(db)
+    m = db.get(Member, member_id)
+    if not m: raise HTTPException(404)
+    monthly = db.query(MonthlyCharge).filter(MonthlyCharge.member_id == m.id).order_by(MonthlyCharge.period.desc()).all()
+    manual = db.query(ManualDebt).filter(ManualDebt.member_id == m.id).order_by(ManualDebt.created_at.desc()).all()
+    payment_id = request.query_params.get("pago")
+    return templates.TemplateResponse("member_debt.html", {
+        "request": request, "m": m, "monthly": monthly, "manual": manual,
+        "balance": member_debt_total(db, m.id), "monthly_balance": monthly_charge_balance,
+        "manual_balance": manual_debt_balance, "period_label": period_label,
+        "payment_id": int(payment_id) if payment_id and payment_id.isdigit() else None,
+    })
+
+
+@app.post("/admin/socios/{member_id}/adeudo/agregar")
+def add_manual_debt(member_id: int, request: Request, concept: str = Form(...), amount: float = Form(...), db: Session = Depends(get_db)):
+    require_admin(request, db)
+    m = db.get(Member, member_id)
+    if not m: raise HTTPException(404)
+    if amount <= 0:
+        raise HTTPException(400, "El adeudo debe ser mayor a cero.")
+    db.add(ManualDebt(member_id=m.id, concept=concept.strip() or "Saldo pendiente", amount=round(amount, 2), paid_amount=0))
+    db.commit()
+    return RedirectResponse(f"/admin/socios/{m.id}/adeudo", 303)
+
+
+@app.post("/admin/socios/{member_id}/adeudo/pagar")
+def pay_member_debt(member_id: int, request: Request, amount: float = Form(...), method: str = Form(...), reference: str = Form(""), db: Session = Depends(get_db)):
+    require_admin(request, db)
+    sync_finances(db)
+    m = db.get(Member, member_id)
+    if not m: raise HTTPException(404)
+    balance = member_debt_total(db, m.id)
+    if balance <= 0:
+        return RedirectResponse(f"/admin/socios/{m.id}/adeudo", 303)
+    amount_to_apply = round(min(max(amount, 0.0), balance), 2)
+    if amount_to_apply <= 0:
+        raise HTTPException(400, "El abono debe ser mayor a cero.")
+    next_id = (db.query(func.max(Payment.id)).scalar() or 0) + 1
+    payment = Payment(member_id=m.id, folio=f"PAG-{next_id:06d}", concept="Abono a mensualidades / adeudo", amount=amount_to_apply, method=method, reference=reference.strip())
+    db.add(payment); db.flush()
+    remaining = amount_to_apply
+    monthly = db.query(MonthlyCharge).filter(MonthlyCharge.member_id == m.id).order_by(MonthlyCharge.due_date.asc(), MonthlyCharge.id.asc()).all()
+    for charge in monthly:
+        due = monthly_charge_balance(charge)
+        if due <= 0 or remaining <= 0: continue
+        applied = round(min(due, remaining), 2)
+        charge.paid_amount = round((charge.paid_amount or 0) + applied, 2)
+        db.add(DebtPaymentAllocation(payment_id=payment.id, target_type="monthly", target_id=charge.id, amount=applied))
+        remaining = round(remaining - applied, 2)
+    manual = db.query(ManualDebt).filter(ManualDebt.member_id == m.id).order_by(ManualDebt.created_at.asc(), ManualDebt.id.asc()).all()
+    for debt in manual:
+        due = manual_debt_balance(debt)
+        if due <= 0 or remaining <= 0: continue
+        applied = round(min(due, remaining), 2)
+        debt.paid_amount = round((debt.paid_amount or 0) + applied, 2)
+        db.add(DebtPaymentAllocation(payment_id=payment.id, target_type="manual", target_id=debt.id, amount=applied))
+        remaining = round(remaining - applied, 2)
+    db.commit()
+    return RedirectResponse(f"/admin/socios/{m.id}/adeudo?pago={payment.id}", 303)
+
+
+@app.get("/mi-adeudo", response_class=HTMLResponse)
+def my_debt(request: Request, db: Session = Depends(get_db)):
+    u = require_member(request, db)
+    sync_finances(db)
+    m = u.member
+    monthly = db.query(MonthlyCharge).filter(MonthlyCharge.member_id == m.id).order_by(MonthlyCharge.period.desc()).all()
+    manual = db.query(ManualDebt).filter(ManualDebt.member_id == m.id).order_by(ManualDebt.created_at.desc()).all()
+    return templates.TemplateResponse("my_debt.html", {
+        "request": request, "m": m, "monthly": monthly, "manual": manual,
+        "balance": member_debt_total(db, m.id), "monthly_balance": monthly_charge_balance,
+        "manual_balance": manual_debt_balance, "period_label": period_label,
+    })
 
 
 @app.get("/verificar/{token}", response_class=HTMLResponse)
@@ -524,6 +751,19 @@ def payment_receipt(payment_id: int, request: Request, db: Session = Depends(get
         pp = p.pool_pass
         c.setFillColorRGB(.08,.14,.28); c.setFont("Helvetica-Bold",10); c.drawString(45,y,"Acceso de alberca:")
         c.setFont("Helvetica",10); c.drawString(160,y,f"{pp.plan_type} · {pp.start_date.strftime('%d/%m/%Y')} al {pp.end_date.strftime('%d/%m/%Y')}")
+        y -= 24
+    if p.debt_allocations:
+        c.setFillColorRGB(.08,.14,.28); c.setFont("Helvetica-Bold",10); c.drawString(45,y,"Aplicación del abono:")
+        y -= 18
+        for alloc in p.debt_allocations[:8]:
+            if alloc.target_type == "monthly":
+                target = db.get(MonthlyCharge, alloc.target_id)
+                desc = f"Mensualidad {period_label(target.period)}" if target else "Mensualidad"
+            else:
+                target = db.get(ManualDebt, alloc.target_id)
+                desc = target.concept if target else "Adeudo anterior"
+            c.setFont("Helvetica",9); c.drawString(60,y,desc[:52]); c.drawRightString(w-60,y,f"${alloc.amount:,.2f}")
+            y -= 16
     c.setStrokeColorRGB(.55,.58,.65); c.line(70,125,270,125); c.line(w-270,125,w-70,125)
     c.setFillColorRGB(.25,.28,.35); c.setFont("Helvetica",8); c.drawCentredString(170,110,"Recibí / Caja"); c.drawCentredString(w-170,110,"Socio")
     c.setFont("Helvetica",7.5); c.drawCentredString(w/2,55,"Comprobante generado por el sistema de Club de Leones de Sabinas")
@@ -550,5 +790,5 @@ def manifest():
 
 @app.get("/sw.js")
 def sw():
-    js='''const CACHE="leones-sabinas-v3";self.addEventListener("install",e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(["/","/static/style.css"]))));self.addEventListener("fetch",e=>e.respondWith(fetch(e.request).catch(()=>caches.match(e.request))));'''
+    js='''const CACHE="leones-sabinas-v4";self.addEventListener("install",e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(["/","/static/style.css"]))));self.addEventListener("fetch",e=>e.respondWith(fetch(e.request).catch(()=>caches.match(e.request))));'''
     return StreamingResponse(io.BytesIO(js.encode()), media_type="application/javascript")

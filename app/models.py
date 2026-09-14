@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, DateTime, Float, ForeignKey, Boolean, Text
+from sqlalchemy import Column, Integer, String, Date, DateTime, Float, ForeignKey, Boolean, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from .database import Base
@@ -26,6 +26,8 @@ class Member(Base):
     photo = relationship("MemberPhoto", back_populates="member", uselist=False, cascade="all, delete-orphan")
     family_members = relationship("FamilyMember", back_populates="member", cascade="all, delete-orphan", order_by="FamilyMember.id")
     pool_passes = relationship("PoolPass", back_populates="member", cascade="all, delete-orphan")
+    monthly_charges = relationship("MonthlyCharge", back_populates="member", cascade="all, delete-orphan")
+    manual_debts = relationship("ManualDebt", back_populates="member", cascade="all, delete-orphan")
 
 
 class MemberPhoto(Base):
@@ -74,6 +76,7 @@ class Payment(Base):
     paid_at = Column(DateTime, default=datetime.utcnow)
     member = relationship("Member", back_populates="payments")
     pool_pass = relationship("PoolPass", back_populates="payment", uselist=False)
+    debt_allocations = relationship("DebtPaymentAllocation", back_populates="payment", cascade="all, delete-orphan")
 
 
 class PoolPass(Base):
@@ -88,6 +91,50 @@ class PoolPass(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     member = relationship("Member", back_populates="pool_passes")
     payment = relationship("Payment", back_populates="pool_pass")
+
+
+class ClubSetting(Base):
+    __tablename__ = "club_settings"
+    id = Column(Integer, primary_key=True)
+    key = Column(String(80), unique=True, index=True, nullable=False)
+    value = Column(String(255), default="")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MonthlyCharge(Base):
+    __tablename__ = "monthly_charges"
+    __table_args__ = (UniqueConstraint("member_id", "period", name="uq_monthly_charge_member_period"),)
+    id = Column(Integer, primary_key=True)
+    member_id = Column(Integer, ForeignKey("members.id"), nullable=False, index=True)
+    period = Column(String(7), nullable=False, index=True)  # YYYY-MM
+    base_amount = Column(Float, nullable=False, default=0)
+    late_fee = Column(Float, nullable=False, default=0)
+    paid_amount = Column(Float, nullable=False, default=0)
+    due_date = Column(Date, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    member = relationship("Member", back_populates="monthly_charges")
+
+
+class ManualDebt(Base):
+    __tablename__ = "manual_debts"
+    id = Column(Integer, primary_key=True)
+    member_id = Column(Integer, ForeignKey("members.id"), nullable=False, index=True)
+    concept = Column(String(180), nullable=False)
+    amount = Column(Float, nullable=False)
+    paid_amount = Column(Float, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    member = relationship("Member", back_populates="manual_debts")
+
+
+class DebtPaymentAllocation(Base):
+    __tablename__ = "debt_payment_allocations"
+    id = Column(Integer, primary_key=True)
+    payment_id = Column(Integer, ForeignKey("payments.id"), nullable=False, index=True)
+    target_type = Column(String(20), nullable=False)  # monthly / manual
+    target_id = Column(Integer, nullable=False)
+    amount = Column(Float, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    payment = relationship("Payment", back_populates="debt_allocations")
 
 
 class User(Base):

@@ -6,5 +6,7 @@
 
 <section class="card"><h2>Familia registrada</h2><div class="family-summary">{% for f in m.family_members if f.active %}<div class="family-chip">{% if f.photo_data %}<img src="{{f.photo_data}}" alt="{{f.full_name}}">{% endif %}<div><b>{{f.full_name}}</b><small>{{f.relationship_type}}</small></div></div>{% else %}<p>No hay familiares registrados.</p>{% endfor %}</div></section>
 
+<section class="card debt-card"><div class="section-title"><h2>Mi estado de cuenta</h2>{% if debt_total > 0 %}<span class="badge danger">Saldo pendiente</span>{% else %}<span class="badge success">Al corriente</span>{% endif %}</div><div class="debt-total">${{"{:,.2f}".format(debt_total)}}</div><p>{% if debt_total > 0 %}Consulta tus mensualidades, recargos y saldos pendientes.{% else %}No tienes adeudos pendientes.{% endif %}</p><a class="btn secondary" href="/mi-adeudo">Ver detalle de adeudo</a></section>
+
 <section class="card"><h2>Mis pagos</h2><div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Concepto</th><th>Método</th><th>Importe</th><th>Recibo</th></tr></thead><tbody>{% for p in m.payments|sort(attribute='paid_at', reverse=true) %}<tr><td>{{p.paid_at.strftime('%d/%m/%Y')}}</td><td>{{p.concept}}</td><td>{{p.method}}</td><td>${{"{:,.2f}".format(p.amount)}}</td><td><a class="mini-btn" target="_blank" href="/recibo/{{p.id}}.pdf">Imprimir</a></td></tr>{% else %}<tr><td colspan="5">Aún no tienes pagos registrados.</td></tr>{% endfor %}</tbody></table></div></section></div>
 {% endblock %}
