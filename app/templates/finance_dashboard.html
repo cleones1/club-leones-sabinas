@@ -1,13 +1,13 @@
-{% extends "base.html" %}{% block title %}Mensualidades y adeudos · Club de Leones de Sabinas{% endblock %}{% block content %}
-<div class="page-head"><div><span class="eyebrow">ADMINISTRACIÓN · FINANZAS</span><h1>Mensualidades y adeudos</h1></div><a href="/admin">← Panel</a></div>
-{% if saved %}<div class="alert success">Cuotas mensuales actualizadas y aplicadas al mes actual según el tipo de socio.</div>{% endif %}
+{% extends "base.html" %}{% block title %}Cuotas y adeudos · Club de Leones de Sabinas{% endblock %}{% block content %}
+<div class="page-head"><div><span class="eyebrow">ADMINISTRACIÓN · FINANZAS</span><h1>Cuotas y adeudos</h1></div><a href="/admin">← Panel</a></div>
+{% if saved %}<div class="alert success">Cuotas base actualizadas y aplicadas al mes actual según el tipo de socio.</div>{% endif %}
 <div class="detail-grid">
-<section class="card"><h2>Cuotas mensuales por tipo de socio</h2><p>El sistema carga automáticamente la cuota que corresponde a cada socio.</p>
+<section class="card"><h2>Cuota base por tipo de socio</h2><p>La cuota mensual es la base. El sistema calcula automáticamente el pago trimestral por 3 meses y el anual por 12 meses.</p>
 <form class="compact-form" action="/admin/finanzas/mensualidad" method="post">
-<label>Socio regular<input type="number" name="regular_amount" min="0" step="0.01" value="{{'%.2f'|format(monthly_fee)}}" required></label>
-<label>Socio pensionado<input type="number" name="pensionado_amount" min="0" step="0.01" value="{{'%.2f'|format(monthly_fee_pensionado)}}" required></label>
+<label>Socio regular · mensual<input type="number" name="regular_amount" min="0" step="0.01" value="{{'%.2f'|format(monthly_fee)}}" required><small>Trimestral: ${{"{:,.2f}".format(monthly_fee * 3)}} · Anual: ${{"{:,.2f}".format(monthly_fee * 12)}}</small></label>
+<label>Socio pensionado · mensual<input type="number" name="pensionado_amount" min="0" step="0.01" value="{{'%.2f'|format(monthly_fee_pensionado)}}" required><small>Trimestral: ${{"{:,.2f}".format(monthly_fee_pensionado * 3)}} · Anual: ${{"{:,.2f}".format(monthly_fee_pensionado * 12)}}</small></label>
 <button>Guardar cuotas</button></form>
-<hr><small>Fecha límite: día 30 de cada mes. Si una mensualidad no se liquida, se agrega automáticamente un recargo del 10% sobre la cuota base que corresponda al socio.</small></section>
+<hr><small>Fecha límite: día 30 de cada mes. Si una cuota mensual no se liquida, se agrega automáticamente un recargo del 10% sobre la cuota base correspondiente.</small></section>
 <section class="card"><h2>{{period}}</h2><div class="member-status"><span class="badge {{'danger' if total_debt > 0 else 'success'}}">{{'Cartera con adeudo' if total_debt > 0 else 'Todos al corriente'}}</span><b>${{"{:,.2f}".format(total_debt)}}</b><small>Adeudo total de socios</small></div><hr><form action="/admin/finanzas/generar" method="post"><button class="secondary">Verificar / generar cargos del mes</button></form></section>
 </div>
 <section class="card"><div class="section-title"><h2>Socios con saldo pendiente</h2><span>{{debtors|length}} socio(s)</span></div><div class="table-wrap"><table><thead><tr><th>Socio</th><th>Tipo</th><th>Número</th><th>Saldo</th><th></th></tr></thead><tbody>{% for m,balance in debtors %}<tr><td><strong>{{m.first_name}} {{m.last_name}}</strong><small>{{m.email}}</small></td><td><span class="badge {{'warning' if member_type_map[m.id] == 'Pensionado' else 'muted'}}">{{member_type_map[m.id]}}</span></td><td>{{m.member_number}}</td><td><strong class="money-danger">${{"{:,.2f}".format(balance)}}</strong></td><td><a href="/admin/socios/{{m.id}}/adeudo">Estado de cuenta →</a></td></tr>{% else %}<tr><td colspan="5">No hay socios con adeudo.</td></tr>{% endfor %}</tbody></table></div></section>
