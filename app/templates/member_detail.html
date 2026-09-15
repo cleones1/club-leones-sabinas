@@ -22,10 +22,116 @@
 
 <section class="card debt-card"><div class="section-title"><div><span class="eyebrow">ESTADO DE CUENTA</span><h2>Adeudo del socio</h2></div>{% if debt_total > 0 %}<span class="badge danger">Saldo pendiente</span>{% else %}<span class="badge success">Al corriente</span>{% endif %}</div><div class="debt-total">${{"{:,.2f}".format(debt_total)}}</div><p>Incluye mensualidades pendientes, recargos y saldos anteriores registrados.</p><a class="btn {{'secondary' if debt_total == 0 else ''}}" href="/admin/socios/{{m.id}}/adeudo">Ver estado de cuenta / registrar abono</a></section>
 
+<section class="card" id="renta-instalaciones">
+<div class="section-title"><div><span class="eyebrow">RENTA A SOCIOS</span><h2>Renta de instalaciones</h2></div><span class="badge muted">Socio {{m.member_number}}</span></div>
+<p>Selecciona cada concepto de manera individual. El importe y la nota se generan automáticamente.</p>
+<form id="rental-form" class="compact-form" action="/admin/socios/{{m.id}}/pago" method="post" data-member="{{m.member_number}}">
+<label class="wide">Instalación / concepto
+<select id="rental-item" required>
+<option value="" data-price="0" data-unit="fijo" data-desc="">Seleccionar...</option>
+<optgroup label="Salones">
+<option data-price="4000" data-unit="fijo" data-desc="Salón Fundadores · Total">Salón Fundadores · Total $4,000</option>
+<option data-price="2000" data-unit="fijo" data-desc="Salón Fundadores · Anticipo">Salón Fundadores · Anticipo $2,000</option>
+<option data-price="500" data-unit="hora" data-desc="Clima extra Fundadores">Clima extra Fundadores · $500 por hora</option>
+<option data-price="1800" data-unit="fijo" data-desc="Salón Damas · Total">Salón Damas · Total $1,800</option>
+<option data-price="900" data-unit="fijo" data-desc="Salón Damas · Anticipo">Salón Damas · Anticipo $900</option>
+<option data-price="350" data-unit="hora" data-desc="Clima extra Damas">Clima extra Damas · $350 por hora</option>
+<option data-price="900" data-unit="fijo" data-desc="Salón Presidentes · Total">Salón Presidentes · Total $900</option>
+<option data-price="450" data-unit="fijo" data-desc="Salón Presidentes · Anticipo">Salón Presidentes · Anticipo $450</option>
+</optgroup>
+<optgroup label="Guarda y palapas">
+<option data-price="750" data-unit="fijo" data-desc="Guarda · Total">Guarda · Total $750</option>
+<option data-price="375" data-unit="fijo" data-desc="Guarda · Anticipo">Guarda · Anticipo $375</option>
+<option data-price="500" data-unit="unidad" data-desc="Renta de clima">Renta de clima · $500 c/u</option>
+<option data-price="1100" data-unit="fijo" data-desc="Palapa Principal · Total">Palapa Principal · Total $1,100</option>
+<option data-price="550" data-unit="fijo" data-desc="Palapa Principal · Anticipo">Palapa Principal · Anticipo $550</option>
+<option data-price="700" data-unit="fijo" data-desc="Palapa Hacienda · Total">Palapa Hacienda · Total $700</option>
+<option data-price="350" data-unit="fijo" data-desc="Palapa Hacienda · Anticipo">Palapa Hacienda · Anticipo $350</option>
+<option data-price="700" data-unit="fijo" data-desc="Palapa Palma · Total">Palapa Palma · Total $700</option>
+<option data-price="350" data-unit="fijo" data-desc="Palapa Palma · Anticipo">Palapa Palma · Anticipo $350</option>
+<option data-price="500" data-unit="fijo" data-desc="Palapa Zacatito · Total">Palapa Zacatito · Total $500</option>
+<option data-price="250" data-unit="fijo" data-desc="Palapa Zacatito · Anticipo">Palapa Zacatito · Anticipo $250</option>
+</optgroup>
+<optgroup label="Alberca para eventos · hasta 12 años cumplidos">
+<option data-price="500" data-unit="fijo" data-desc="Derecho de alberca para evento">Derecho de alberca · $500</option>
+<option data-price="400" data-unit="fijo" data-desc="Salvavidas para evento">Salvavidas · $400</option>
+<option data-price="200" data-unit="fijo" data-desc="Entrada a la alberca para evento">Entrada a la alberca · $200</option>
+</optgroup>
+</select>
+</label>
+<label>Fecha de renta<input id="rental-date" type="date" required></label>
+<label id="rental-qty-wrap">Cantidad / horas<input id="rental-qty" type="number" min="1" step="1" value="1"></label>
+<label>Importe calculado<input id="rental-amount-view" type="text" readonly></label>
+<label>Método<select name="method" required><option>Efectivo</option><option>Transferencia</option><option>Tarjeta</option><option>Otro</option></select></label>
+<label class="wide">Nota automática<input id="rental-note-view" type="text" readonly></label>
+<input type="hidden" name="concept" id="rental-concept">
+<input type="hidden" name="amount" id="rental-amount">
+<input type="hidden" name="reference" id="rental-reference">
+<input type="hidden" name="pool_plan" value="">
+<input type="hidden" name="pool_start_date" value="">
+<button type="submit">Registrar pago / anticipo</button>
+<button type="submit" class="secondary" formaction="/admin/socios/{{m.id}}/adeudo/agregar">Agregar al adeudo</button>
+</form>
+<small>Para clima por hora o por unidad, ajusta la cantidad. En el recibo se mostrará el socio que renta y la fecha de renta.</small>
+</section>
+
 <div class="detail-grid">
 <section class="card"><h2>Registrar pago</h2><form class="compact-form" action="/admin/socios/{{m.id}}/pago" method="post"><label>Concepto<input name="concept" value="Mensualidad / Alberca" required></label><label>Importe<input name="amount" type="number" step="0.01" required></label><label>Método<select name="method"><option>Efectivo</option><option>Transferencia</option><option>Tarjeta</option><option>Otro</option></select></label><label>Referencia<input name="reference"></label><label>Acceso de alberca<select name="pool_plan"><option value="">No aplica</option><option>Mensual</option><option>Anual</option></select></label><label>Inicio de alberca<input name="pool_start_date" type="date"><small>Si se deja vacío, inicia hoy.</small></label><button>Guardar pago</button></form></section>
 <section class="card"><h2>Agregar / renovar membresía</h2><form class="compact-form" action="/admin/socios/{{m.id}}/membresia" method="post"><label>Tipo<input name="membership_type" value="Anual" required></label><label>Inicio<input name="start_date" type="date" required></label><label>Vencimiento<input name="end_date" type="date" required></label><label>Importe<input name="amount" type="number" step="0.01" value="0"></label><button>Actualizar vigencia</button></form></section>
 </div>
 
 <section class="card"><h2>Historial de pagos</h2><div class="table-wrap"><table><thead><tr><th>Folio</th><th>Fecha</th><th>Concepto</th><th>Método</th><th>Importe</th><th>Alberca</th><th>Recibo</th></tr></thead><tbody>{% for p in m.payments|sort(attribute='paid_at', reverse=true) %}<tr><td>{{p.folio}}</td><td>{{p.paid_at.strftime('%d/%m/%Y')}}</td><td>{{p.concept}}</td><td>{{p.method}}</td><td>${{"{:,.2f}".format(p.amount)}}</td><td>{% if p.pool_pass %}{{p.pool_pass.plan_type}}<small>{{p.pool_pass.end_date.strftime('%d/%m/%Y')}}</small>{% else %}—{% endif %}</td><td><a class="mini-btn" target="_blank" href="/recibo/{{p.id}}.pdf">Imprimir</a></td></tr>{% else %}<tr><td colspan="7">Sin pagos registrados.</td></tr>{% endfor %}</tbody></table></div></section>
+
+<script>
+(function(){
+  const form = document.getElementById('rental-form');
+  if (!form) return;
+  const item = document.getElementById('rental-item');
+  const dateField = document.getElementById('rental-date');
+  const qty = document.getElementById('rental-qty');
+  const qtyWrap = document.getElementById('rental-qty-wrap');
+  const amount = document.getElementById('rental-amount');
+  const amountView = document.getElementById('rental-amount-view');
+  const concept = document.getElementById('rental-concept');
+  const reference = document.getElementById('rental-reference');
+  const noteView = document.getElementById('rental-note-view');
+  const renter = form.dataset.member;
+
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  if (!dateField.value) dateField.value = yyyy + '-' + mm + '-' + dd;
+
+  function refreshRental(){
+    const opt = item.options[item.selectedIndex];
+    const unit = opt ? (opt.dataset.unit || 'fijo') : 'fijo';
+    const variable = unit === 'hora' || unit === 'unidad';
+    qtyWrap.style.display = variable ? '' : 'none';
+    if (!variable) qty.value = '1';
+    const quantity = variable ? Math.max(1, parseInt(qty.value || '1', 10)) : 1;
+    const price = opt ? Number(opt.dataset.price || 0) : 0;
+    const total = price * quantity;
+    amount.value = total.toFixed(2);
+    amountView.value = total ? total.toLocaleString('es-MX', {style:'currency', currency:'MXN'}) : '';
+
+    const rawDate = dateField.value || '';
+    const parts = rawDate.split('-');
+    const dateText = parts.length === 3 ? parts[2] + '/' + parts[1] + '/' + parts[0] : rawDate;
+    let quantityText = '';
+    if (unit === 'hora') quantityText = ' · ' + quantity + ' hora' + (quantity === 1 ? '' : 's');
+    if (unit === 'unidad') quantityText = ' · ' + quantity + ' unidad' + (quantity === 1 ? '' : 'es');
+    const description = opt ? (opt.dataset.desc || '') : '';
+    concept.value = description ? ('Renta ' + description + quantityText + ' · ' + dateText + ' · Socio ' + renter).slice(0, 180) : '';
+    const note = dateText ? ('Socio que renta: ' + renter + ' · Fecha de renta: ' + dateText) : ('Socio que renta: ' + renter);
+    reference.value = note.slice(0, 120);
+    noteView.value = reference.value;
+  }
+
+  item.addEventListener('change', refreshRental);
+  dateField.addEventListener('change', refreshRental);
+  qty.addEventListener('input', refreshRental);
+  refreshRental();
+})();
+</script>
 {% endblock %}
