@@ -1,0 +1,55 @@
+{% extends "base.html" %}{% block title %}Administradores y base de datos · Club de Leones de Sabinas{% endblock %}{% block content %}
+<div class="page-head"><div><span class="eyebrow">ADMINISTRACIÓN · SEGURIDAD Y MANTENIMIENTO</span><h1>Administradores y base de datos</h1></div><div class="actions"><a class="btn secondary" href="/admin">← Panel</a></div></div>
+
+{% if error %}<div class="alert">{{error}}</div>{% endif %}
+{% if created %}<div class="alert success">Administrador creado correctamente.</div>{% endif %}
+{% if updated %}<div class="alert success">Administrador actualizado correctamente.</div>{% endif %}
+{% if cleaned %}<div class="alert success">Limpieza segura completada. Registros técnicos eliminados: {{cleaned_count}}.</div>{% endif %}
+
+<div class="detail-grid">
+<section class="card">
+<div class="section-title"><div><span class="eyebrow">ACCESOS</span><h2>Crear administrador</h2></div><span class="badge success">Acceso total</span></div>
+<p>Crea cuentas exclusivas para personal autorizado. No es necesario asociarlas a un socio.</p>
+<form class="compact-form" action="/admin/configuracion/administradores/nuevo" method="post">
+<label>Correo<input name="email" type="email" required placeholder="administrador@correo.com"></label>
+<label>Contraseña inicial<input name="password" type="password" minlength="8" required><small>Mínimo 8 caracteres.</small></label>
+<button>Crear administrador</button>
+</form>
+</section>
+
+<section class="card">
+<div class="section-title"><div><span class="eyebrow">BASE DE DATOS</span><h2>Diagnóstico general</h2></div><span class="badge {{'danger' if orphan_total > 0 else 'success'}}">{{orphan_total}} huérfano(s)</span></div>
+<p>Conteo actual de registros principales. Esta vista no modifica información.</p>
+<div class="stats">
+{% for label,value in stats.items() %}<div class="stat"><span>{{label}}</span><b>{{value}}</b></div>{% endfor %}
+</div>
+</section>
+</div>
+
+<section class="card">
+<div class="section-title"><div><span class="eyebrow">ADMINISTRADORES</span><h2>Usuarios administrativos</h2></div><span>{{admins|length}} cuenta(s)</span></div>
+<div class="table-wrap"><table><thead><tr><th>Correo</th><th>Estatus</th><th>Contraseña</th><th>Acción</th></tr></thead><tbody>
+{% for a in admins %}<tr>
+<td><strong>{{a.email}}</strong>{% if a.id == current.id %}<small>Sesión actual</small>{% endif %}</td>
+<td><span class="badge {{'success' if a.active else 'danger'}}">{{'Activo' if a.active else 'Desactivado'}}</span></td>
+<td><form class="compact-form" action="/admin/configuracion/administradores/{{a.id}}/password" method="post"><input name="password" type="password" minlength="8" placeholder="Nueva contraseña" required><button class="secondary">Cambiar</button></form></td>
+<td><form action="/admin/configuracion/administradores/{{a.id}}/toggle" method="post"><button class="secondary" {% if a.id == current.id and a.active %}disabled title="No puedes desactivar tu propia sesión"{% endif %}>{{'Desactivar' if a.active else 'Activar'}}</button></form></td>
+</tr>{% endfor %}
+</tbody></table></div>
+<small>Por seguridad, no se permite desactivar la cuenta con la que estás conectado ni dejar el sistema sin administradores activos.</small>
+</section>
+
+<section class="card">
+<div class="section-title"><div><span class="eyebrow">MANTENIMIENTO</span><h2>Limpieza segura de la base de datos</h2></div><span class="badge {{'warning' if orphan_total > 0 else 'success'}}">{{orphan_total}} por revisar</span></div>
+<p>Esta limpieza únicamente elimina <b>registros técnicos huérfanos</b>: datos que apuntan a socios, pagos o adeudos que ya no existen. <b>No elimina socios vigentes, pagos válidos, mensualidades ni adeudos asociados a un socio existente.</b></p>
+<div class="table-wrap"><table><thead><tr><th>Revisión</th><th>Detectados</th></tr></thead><tbody>
+{% for label,value in orphans.items() %}<tr><td>{{label}}</td><td><strong>{{value}}</strong></td></tr>{% endfor %}
+</tbody></table></div>
+<form class="compact-form" action="/admin/configuracion/base-datos/limpieza-segura" method="post" onsubmit="return confirm('Se eliminarán únicamente registros técnicos huérfanos. ¿Continuar?')">
+<label>Confirmación<input name="confirmation" required placeholder="Escribe LIMPIAR"><small>Para ejecutar la limpieza escribe exactamente: LIMPIAR</small></label>
+<button class="secondary">Ejecutar limpieza segura</button>
+</form>
+<hr>
+<small><b>Importante:</b> una limpieza total de socios, pagos o historial no se ejecuta desde este botón. Ese tipo de eliminación requiere respaldo previo y una acción específica para evitar pérdidas accidentales.</small>
+</section>
+{% endblock %}
