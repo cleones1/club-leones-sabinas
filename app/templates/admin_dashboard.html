@@ -1,5 +1,24 @@
 {% extends "base.html" %}{% block title %}Administración · Club de Leones de Sabinas{% endblock %}{% block content %}
-<div class="page-head"><div><span class="eyebrow">CLUB DE LEONES DE SABINAS · ADMINISTRACIÓN</span><h1>Panel del club</h1></div><div class="actions"><a class="btn secondary" href="/admin/finanzas">Cuotas y adeudos</a><a class="btn" href="/admin/socios/nuevo">+ Nuevo socio</a></div></div>
+{% set fin = namespace(regular=0, pensionado=0, debtors=0) %}
+{% for m in members %}
+  {% if member_type_map[m.id] == 'Pensionado' %}{% set fin.pensionado = fin.pensionado + 1 %}{% else %}{% set fin.regular = fin.regular + 1 %}{% endif %}
+  {% if debt_map[m.id] > 0 %}{% set fin.debtors = fin.debtors + 1 %}{% endif %}
+{% endfor %}
+{% set expected_monthly = (fin.regular * monthly_fee) + (fin.pensionado * monthly_fee_pensionado) %}
+<div class="page-head"><div><span class="eyebrow">CLUB DE LEONES DE SABINAS · ADMINISTRACIÓN</span><h1>Panel del club</h1></div><div class="actions"><a class="btn secondary" href="#estado-financiero-general">Estado financiero general</a><a class="btn secondary" href="/admin/finanzas">Cuotas y adeudos</a><a class="btn" href="/admin/socios/nuevo">+ Nuevo socio</a></div></div>
+
+<section class="card" id="estado-financiero-general">
+<div class="section-title"><div><span class="eyebrow">RESUMEN GENERAL</span><h2>Estado financiero general</h2></div><a class="mini-btn" href="/admin/finanzas">Ver detalle financiero →</a></div>
+<p>Vista consolidada de los movimientos registrados y de la cartera pendiente del Club.</p>
+<div class="stats">
+  <div class="stat"><span>Ingresos registrados del mes</span><b>${{"{:,.2f}".format(income)}}</b><small>Todos los pagos capturados en el mes actual.</small></div>
+  <div class="stat debt-stat"><span>Cartera pendiente total</span><b>${{"{:,.2f}".format(total_debt)}}</b><small>Cuotas, recargos y otros adeudos aún pendientes.</small></div>
+  <div class="stat"><span>Base mensual esperada</span><b>${{"{:,.2f}".format(expected_monthly)}}</b><small>{{fin.regular}} regulares · {{fin.pensionado}} pensionados.</small></div>
+  <div class="stat"><span>Socios con saldo</span><b>{{fin.debtors}}</b><small>de {{total}} socio(s) registrados.</small></div>
+</div>
+<small><b>Nota:</b> este resumen muestra ingresos y cuentas por cobrar. No representa utilidad o pérdida porque el sistema actualmente no registra gastos.</small>
+</section>
+
 <div class="stats"><div class="stat"><span>Socios</span><b>{{total}}</b></div><div class="stat"><span>Activos</span><b>{{active}}</b></div><div class="stat"><span>Suspendidos</span><b>{{suspended}}</b></div><div class="stat"><span>Membresía</span><b>Permanente</b></div><div class="stat"><span>Ingresos del mes</span><b>${{"{:,.2f}".format(income)}}</b></div><div class="stat debt-stat"><span>Adeudo total</span><b>${{"{:,.2f}".format(total_debt)}}</b><small>Regular: ${{"{:,.2f}".format(monthly_fee)}} · Pensionado: ${{"{:,.2f}".format(monthly_fee_pensionado)}}</small></div></div>
 <section class="card"><div class="section-title"><h2>Socios</h2><input id="search" placeholder="Buscar por nombre, correo o número…"></div><div class="table-wrap"><table id="members"><thead><tr><th>Socio</th><th>Tipo</th><th>Contacto</th><th>Membresía</th><th>Estatus</th><th>Adeudo</th><th></th></tr></thead><tbody>{% for m in members %}{% set st=status_fn(m) %}<tr><td><strong>{{m.first_name}} {{m.last_name}}</strong><small>{{m.member_number}}</small></td><td><span class="badge {{'warning' if member_type_map[m.id] == 'Pensionado' else 'muted'}}">{{member_type_map[m.id]}}</span></td><td>{{m.email}}<small>{{m.phone}}</small></td><td><span class="badge success">Permanente</span></td><td><span class="badge {{st[1]}}">{{st[0]}}</span></td><td>{% if debt_map[m.id] > 0 %}<a class="debt-link" href="/admin/socios/{{m.id}}/adeudo">${{"{:,.2f}".format(debt_map[m.id])}}</a>{% else %}<span class="badge success">Al corriente</span>{% endif %}</td><td><a href="/admin/socios/{{m.id}}">Ver →</a></td></tr>{% else %}<tr><td colspan="7">Aún no hay socios registrados.</td></tr>{% endfor %}</tbody></table></div></section>
 {% endblock %}{% block scripts %}<script>const q=document.querySelector('#search'), rows=[...document.querySelectorAll('#members tbody tr')];q?.addEventListener('input',()=>{let v=q.value.toLowerCase();rows.forEach(r=>r.style.display=r.innerText.toLowerCase().includes(v)?'':'none')})</script>{% endblock %}
