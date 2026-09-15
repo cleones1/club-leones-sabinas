@@ -7,7 +7,7 @@
 <label>Fotografía<input name="member_photo" type="file" accept="image/*" capture="user"></label>
 <label>Nombre<input name="first_name" required></label><label>Apellidos<input name="last_name" required></label>
 <label>Correo<input name="email" type="email" required></label><label>Teléfono<input name="phone"></label>
-<label>Tipo de socio<select name="member_type"><option value="Regular">Socio regular</option><option value="Pensionado">Socio pensionado</option></select><small>La mensualidad se calculará según esta categoría.</small></label>
+<label>Tipo de socio<select name="member_type"><option value="Regular">Socio regular</option><option value="Pensionado">Socio pensionado</option></select><small>La cuota se calculará según esta categoría.</small></label>
 <label class="wide">Dirección<textarea name="address"></textarea></label><label>Contacto de emergencia<input name="emergency_contact"></label>
 <label>Contraseña inicial<input name="password" value="Socio123!" required></label><label class="wide">Notas<textarea name="notes"></textarea></label>
 
@@ -19,9 +19,10 @@
 {% endfor %}
 </div>
 
-<h2>Membresía inicial</h2>
-<label>Tipo<input name="membership_type" value="Anual" required></label><label>Importe<input name="amount" type="number" step="0.01" value="0"></label>
-<label>Inicio<input id="start" name="start_date" type="date" required></label><label>Vencimiento<input id="end" name="end_date" type="date" required></label>
+<h2>Membresía del club</h2>
+<div class="wide alert success"><b>Membresía permanente.</b> El socio no tendrá fecha de vencimiento de membresía. Las cuotas se administran por separado.</div>
+<label>Fecha de alta<input id="start" name="start_date" type="date" required><small>Se conserva únicamente como fecha de ingreso al club.</small></label>
+<input type="hidden" name="membership_type" value="Permanente"><input type="hidden" name="amount" value="0"><input type="hidden" name="end_date" value="">
 <div class="wide"><button>Crear socio y familia</button></div></form>
 {% endblock %}
-{% block scripts %}<script>let s=document.querySelector('#start'),e=document.querySelector('#end');let d=new Date();s.value=d.toISOString().slice(0,10);let n=new Date(d);n.setFullYear(n.getFullYear()+1);e.value=n.toISOString().slice(0,10)</script>{% endblock %}
+{% block scripts %}<script>const s=document.querySelector('#start');if(s&&!s.value){const d=new Date();const local=new Date(d.getTime()-d.getTimezoneOffset()*60000);s.value=local.toISOString().slice(0,10)}</script>{% endblock %}
