@@ -5,7 +5,7 @@
   {% if debt_map[m.id] > 0 %}{% set fin.debtors = fin.debtors + 1 %}{% endif %}
 {% endfor %}
 {% set expected_monthly = (fin.regular * monthly_fee) + (fin.pensionado * monthly_fee_pensionado) %}
-<div class="page-head"><div><span class="eyebrow">CLUB DE LEONES DE SABINAS · ADMINISTRACIÓN</span><h1>Panel del club</h1></div><div class="actions"><a class="btn secondary" href="#estado-financiero-general">Estado financiero general</a><a class="btn secondary" href="/admin/finanzas">Cuotas y adeudos</a><a class="btn" href="/admin/socios/nuevo">+ Nuevo socio</a></div></div>
+<div class="page-head"><div><span class="eyebrow">CLUB DE LEONES DE SABINAS · ADMINISTRACIÓN</span><h1>Panel del club</h1></div><div class="actions"><a class="btn secondary" href="/admin/configuracion">Administradores y BD</a><a class="btn secondary" href="#estado-financiero-general">Estado financiero general</a><a class="btn secondary" href="/admin/finanzas">Cuotas y adeudos</a><a class="btn" href="/admin/socios/nuevo">+ Nuevo socio</a></div></div>
 
 <section class="card" id="estado-financiero-general">
 <div class="section-title"><div><span class="eyebrow">RESUMEN GENERAL</span><h2>Estado financiero general</h2></div><a class="mini-btn" href="/admin/finanzas">Ver detalle financiero →</a></div>
