@@ -28,6 +28,7 @@ class Member(Base):
     pool_passes = relationship("PoolPass", back_populates="member", cascade="all, delete-orphan")
     monthly_charges = relationship("MonthlyCharge", back_populates="member", cascade="all, delete-orphan")
     manual_debts = relationship("ManualDebt", back_populates="member", cascade="all, delete-orphan")
+    billing_profile = relationship("MemberBillingProfile", back_populates="member", uselist=False, cascade="all, delete-orphan")
 
 
 class MemberPhoto(Base):
@@ -99,6 +100,16 @@ class ClubSetting(Base):
     key = Column(String(80), unique=True, index=True, nullable=False)
     value = Column(String(255), default="")
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MemberBillingProfile(Base):
+    __tablename__ = "member_billing_profiles"
+    id = Column(Integer, primary_key=True)
+    member_id = Column(Integer, ForeignKey("members.id"), unique=True, nullable=False, index=True)
+    member_type = Column(String(20), nullable=False, default="Regular")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    member = relationship("Member", back_populates="billing_profile")
 
 
 class MonthlyCharge(Base):

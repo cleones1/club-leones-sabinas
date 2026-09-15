@@ -17,7 +17,7 @@ from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 
 from .database import Base, engine, get_db, SessionLocal
-from .models import Member, MemberPhoto, FamilyMember, Membership, Payment, PoolPass, ClubSetting, MonthlyCharge, ManualDebt, DebtPaymentAllocation, User
+from .models import Member, MemberPhoto, FamilyMember, Membership, Payment, PoolPass, ClubSetting, MemberBillingProfile, MonthlyCharge, ManualDebt, DebtPaymentAllocation, User
 from .auth import hash_password, verify_password
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -84,22 +84,53 @@ def pool_status(member: Member):
 SPANISH_MONTHS = ("", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre")
 
 
-def monthly_fee_amount(db: Session):
-    row = db.query(ClubSetting).filter(ClubSetting.key == "monthly_fee_amount").first()
+MEMBER_TYPES = ("Regular", "Pensionado")
+
+
+def normalize_member_type(value: str):
+    return "Pensionado" if (value or "").strip().lower() == "pensionado" else "Regular"
+
+
+def member_billing_type(db: Session, member_id: int):
+    row = db.query(MemberBillingProfile).filter(MemberBillingProfile.member_id == member_id).first()
+    return normalize_member_type(row.member_type if row else "Regular")
+
+
+def set_member_billing_type(db: Session, member_id: int, member_type: str):
+    kind = normalize_member_type(member_type)
+    row = db.query(MemberBillingProfile).filter(MemberBillingProfile.member_id == member_id).first()
+    if not row:
+        row = MemberBillingProfile(member_id=member_id, member_type=kind)
+        db.add(row)
+    else:
+        row.member_type = kind
+    return row
+
+
+def monthly_fee_amount(db: Session, member_type: str = "Regular"):
+    kind = normalize_member_type(member_type)
+    key = "monthly_fee_pensionado_amount" if kind == "Pensionado" else "monthly_fee_amount"
+    row = db.query(ClubSetting).filter(ClubSetting.key == key).first()
     try:
         return round(float(row.value), 2) if row else 0.0
     except (TypeError, ValueError):
         return 0.0
 
 
-def set_monthly_fee_amount(db: Session, amount: float):
-    row = db.query(ClubSetting).filter(ClubSetting.key == "monthly_fee_amount").first()
+def set_monthly_fee_amount(db: Session, amount: float, member_type: str = "Regular"):
+    kind = normalize_member_type(member_type)
+    key = "monthly_fee_pensionado_amount" if kind == "Pensionado" else "monthly_fee_amount"
+    row = db.query(ClubSetting).filter(ClubSetting.key == key).first()
     if not row:
-        row = ClubSetting(key="monthly_fee_amount", value=f"{amount:.2f}")
+        row = ClubSetting(key=key, value=f"{amount:.2f}")
         db.add(row)
     else:
         row.value = f"{amount:.2f}"
     return row
+
+
+def member_monthly_fee(db: Session, member_id: int):
+    return monthly_fee_amount(db, member_billing_type(db, member_id))
 
 
 def monthly_due_date(year: int, month: int):
@@ -129,13 +160,13 @@ def member_debt_total(db: Session, member_id: int):
 
 def ensure_monthly_charges(db: Session, target_day: date | None = None, update_current_amount: bool = False):
     target_day = target_day or date.today()
-    amount = monthly_fee_amount(db)
     period = f"{target_day.year:04d}-{target_day.month:02d}"
     due = monthly_due_date(target_day.year, target_day.month)
-    members = db.query(Member).all()  # La mensualidad se carga a todos los socios registrados.
+    members = db.query(Member).all()
     existing = {c.member_id: c for c in db.query(MonthlyCharge).filter(MonthlyCharge.period == period).all()}
     changed = False
     for member in members:
+        amount = member_monthly_fee(db, member.id)
         charge = existing.get(member.id)
         if not charge and amount > 0:
             db.add(MonthlyCharge(member_id=member.id, period=period, base_amount=amount, late_fee=0, paid_amount=0, due_date=due))
@@ -143,7 +174,6 @@ def ensure_monthly_charges(db: Session, target_day: date | None = None, update_c
         elif charge and update_current_amount and (charge.paid_amount or 0) == 0:
             if round(charge.base_amount or 0, 2) != round(amount, 2):
                 charge.base_amount = amount
-                # Si todavía no está vencida, cualquier recargo previo se limpia.
                 if target_day <= charge.due_date:
                     charge.late_fee = 0
                 changed = True
@@ -378,7 +408,10 @@ def admin_dashboard(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin_dashboard.html", {
         "request": request, "members": members, "status_fn": member_status, "latest_fn": latest_membership,
         "total": len(members), "active": active, "expiring": expiring, "expired": expired, "income": income,
-        "debt_map": debt_map, "total_debt": total_debt, "monthly_fee": monthly_fee_amount(db)
+        "debt_map": debt_map, "total_debt": total_debt,
+        "monthly_fee": monthly_fee_amount(db, "Regular"),
+        "monthly_fee_pensionado": monthly_fee_amount(db, "Pensionado"),
+        "member_type_map": {m.id: member_billing_type(db, m.id) for m in members},
     })
 
 
@@ -393,6 +426,7 @@ async def create_member(
     request: Request,
     member_number: str = Form(""), first_name: str = Form(...), last_name: str = Form(...), email: str = Form(...), phone: str = Form(""),
     address: str = Form(""), emergency_contact: str = Form(""), notes: str = Form(""),
+    member_type: str = Form("Regular"),
     membership_type: str = Form("Anual"), start_date: str = Form(...), end_date: str = Form(...),
     amount: float = Form(0), password: str = Form("Socio123!"),
     spouse_name: str = Form(""), spouse_birth_date: str = Form(""),
@@ -412,6 +446,8 @@ async def create_member(
         return templates.TemplateResponse("member_form.html", {"request": request, "error": "Ese número interno de socio ya está registrado."}, status_code=400)
     m = Member(member_number=number, first_name=first_name.strip(), last_name=last_name.strip(), email=email.strip().lower(), phone=phone.strip(), address=address.strip(), emergency_contact=emergency_contact.strip(), notes=notes.strip(), qr_token=secrets.token_urlsafe(24))
     db.add(m); db.flush()
+    set_member_billing_type(db, m.id, member_type)
+    db.flush()  # SessionLocal usa autoflush=False; permite leer de inmediato la categoría recién asignada.
     member_photo_data = await image_to_data_url(member_photo)
     if member_photo_data:
         db.add(MemberPhoto(member_id=m.id, data=member_photo_data))
@@ -423,7 +459,7 @@ async def create_member(
     await upsert_family_slot(db, m, "Hijo 3", child3_name, child3_birth_date, child3_photo)
     await upsert_family_slot(db, m, "Hijo 4", child4_name, child4_birth_date, child4_photo)
     # Si ya existe una mensualidad configurada, el socio nuevo recibe el cargo del mes actual.
-    current_fee = monthly_fee_amount(db)
+    current_fee = member_monthly_fee(db, m.id)
     if current_fee > 0:
         today = date.today()
         db.add(MonthlyCharge(member_id=m.id, period=f"{today.year:04d}-{today.month:02d}", base_amount=current_fee, late_fee=0, paid_amount=0, due_date=monthly_due_date(today.year, today.month)))
@@ -447,13 +483,15 @@ def member_detail(member_id: int, request: Request, db: Session = Depends(get_db
         "family": family, "family_by_type": family_by_type,
         "family_saved": request.query_params.get("familia") == "guardada",
         "debt_total": member_debt_total(db, m.id),
+        "member_type": member_billing_type(db, m.id),
+        "member_monthly_fee": member_monthly_fee(db, m.id),
     })
 
 
 @app.post("/admin/socios/{member_id}/datos")
 async def update_member_data(member_id: int, request: Request,
     member_number: str = Form(...), first_name: str = Form(...), last_name: str = Form(...), email: str = Form(...), phone: str = Form(""),
-    address: str = Form(""), emergency_contact: str = Form(""), notes: str = Form(""), member_photo: Optional[UploadFile] = File(None),
+    address: str = Form(""), emergency_contact: str = Form(""), notes: str = Form(""), member_type: str = Form("Regular"), member_photo: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db)):
     require_admin(request, db)
     m = db.get(Member, member_id)
@@ -467,11 +505,13 @@ async def update_member_data(member_id: int, request: Request,
         raise HTTPException(400, "Ese correo ya está en uso.")
     m.member_number = number; m.first_name = first_name.strip(); m.last_name = last_name.strip(); m.email = email.strip().lower(); m.phone = phone.strip(); m.address = address.strip(); m.emergency_contact = emergency_contact.strip(); m.notes = notes.strip()
     if m.user: m.user.email = m.email
+    set_member_billing_type(db, m.id, member_type)
     photo_data = await image_to_data_url(member_photo)
     if photo_data:
         if m.photo: m.photo.data = photo_data
         else: db.add(MemberPhoto(member_id=m.id, data=photo_data))
     db.commit()
+    sync_finances(db, update_current_amount=True)
     return RedirectResponse(f"/admin/socios/{m.id}", 303)
 
 
@@ -537,7 +577,7 @@ def my_account(request: Request, db: Session = Depends(get_db)):
     u = require_member(request, db)
     sync_finances(db)
     m = u.member
-    return templates.TemplateResponse("member_portal.html", {"request": request, "m": m, "status": member_status(m), "latest": latest_membership(m), "pool": pool_status(m), "debt_total": member_debt_total(db, m.id)})
+    return templates.TemplateResponse("member_portal.html", {"request": request, "m": m, "status": member_status(m), "latest": latest_membership(m), "pool": pool_status(m), "debt_total": member_debt_total(db, m.id), "member_type": member_billing_type(db, m.id), "member_monthly_fee": member_monthly_fee(db, m.id)})
 
 
 @app.get("/admin/finanzas", response_class=HTMLResponse)
@@ -554,17 +594,23 @@ def finance_dashboard(request: Request, db: Session = Depends(get_db)):
             total_debt += balance
     today = date.today()
     return templates.TemplateResponse("finance_dashboard.html", {
-        "request": request, "monthly_fee": monthly_fee_amount(db), "debtors": debtors,
+        "request": request,
+        "monthly_fee": monthly_fee_amount(db, "Regular"),
+        "monthly_fee_pensionado": monthly_fee_amount(db, "Pensionado"),
+        "member_type_map": {m.id: member_billing_type(db, m.id) for m in members},
+        "debtors": debtors,
         "total_debt": round(total_debt, 2), "period": f"{SPANISH_MONTHS[today.month]} {today.year}",
         "saved": request.query_params.get("guardado") == "1",
     })
 
 
 @app.post("/admin/finanzas/mensualidad")
-def update_monthly_fee(request: Request, amount: float = Form(...), db: Session = Depends(get_db)):
+def update_monthly_fee(request: Request, regular_amount: float = Form(...), pensionado_amount: float = Form(...), db: Session = Depends(get_db)):
     require_admin(request, db)
-    amount = round(max(0.0, amount), 2)
-    set_monthly_fee_amount(db, amount)
+    regular_amount = round(max(0.0, regular_amount), 2)
+    pensionado_amount = round(max(0.0, pensionado_amount), 2)
+    set_monthly_fee_amount(db, regular_amount, "Regular")
+    set_monthly_fee_amount(db, pensionado_amount, "Pensionado")
     db.commit()
     sync_finances(db, update_current_amount=True)
     return RedirectResponse("/admin/finanzas?guardado=1", 303)
@@ -591,6 +637,8 @@ def member_debt_page(member_id: int, request: Request, db: Session = Depends(get
         "balance": member_debt_total(db, m.id), "monthly_balance": monthly_charge_balance,
         "manual_balance": manual_debt_balance, "period_label": period_label,
         "payment_id": int(payment_id) if payment_id and payment_id.isdigit() else None,
+        "member_type": member_billing_type(db, m.id),
+        "member_monthly_fee": member_monthly_fee(db, m.id),
     })
 
 
@@ -653,6 +701,8 @@ def my_debt(request: Request, db: Session = Depends(get_db)):
         "request": request, "m": m, "monthly": monthly, "manual": manual,
         "balance": member_debt_total(db, m.id), "monthly_balance": monthly_charge_balance,
         "manual_balance": manual_debt_balance, "period_label": period_label,
+        "member_type": member_billing_type(db, m.id),
+        "member_monthly_fee": member_monthly_fee(db, m.id),
     })
 
 
