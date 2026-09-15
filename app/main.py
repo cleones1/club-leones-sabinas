@@ -775,36 +775,54 @@ def payment_receipt(payment_id: int, request: Request, db: Session = Depends(get
     u = auth_user(request, db); p = db.get(Payment, payment_id)
     if not p: raise HTTPException(404)
     if not u or (u.role != "admin" and u.member_id != p.member_id): raise HTTPException(403)
-    m = p.member; out = io.BytesIO(); c = canvas.Canvas(out, pagesize=letter); w, h = letter
-    c.setFillColorRGB(0.00,0.20,0.55); c.rect(0,h-82,w,82,fill=1,stroke=0)
-    c.setFillColorRGB(1,1,1); c.setFont("Helvetica-Bold",20); c.drawString(45,h-50,"CLUB DE LEONES DE SABINAS")
-    c.setFont("Helvetica",10); c.drawString(45,h-68,"RECIBO DE PAGO")
-    c.setFillColorRGB(.08,.14,.28); c.setFont("Helvetica-Bold",13); c.drawString(45,h-125,f"Folio: {p.folio}")
-    c.setFont("Helvetica",11)
+    m = p.member
+
+    # Recibo optimizado para impresora térmica de tickets de 80 mm.
+    # La altura se calcula según el contenido para evitar desperdicio de papel.
+    ticket_width = 80 * mm
+    margin = 5 * mm
+    content_width = ticket_width - (2 * margin)
+    max_chars = 39
+
+    def wrap_ticket_text(value, limit=max_chars):
+        text = str(value or "—").strip()
+        words = text.replace("·", " · ").split()
+        lines = []
+        current = ""
+        for word in words:
+            candidate = word if not current else f"{current} {word}"
+            if len(candidate) <= limit:
+                current = candidate
+                continue
+            if current:
+                lines.append(current)
+            while len(word) > limit:
+                lines.append(word[:limit])
+                word = word[limit:]
+            current = word
+        if current:
+            lines.append(current)
+        return lines or ["—"]
+
     rows = [
         ("Fecha", p.paid_at.strftime('%d/%m/%Y %H:%M')),
         ("Socio", f"{m.first_name} {m.last_name}"),
         ("Número de socio", m.member_number),
         ("Concepto", p.concept),
         ("Método", p.method),
-        ("Referencia", p.reference or "—"),
+        ("Referencia / nota", p.reference or "—"),
     ]
-    y = h-165
-    for label, value in rows:
-        c.setFont("Helvetica-Bold",10); c.drawString(45,y,label+":")
-        c.setFont("Helvetica",10); c.drawString(160,y,str(value)[:70]); y -= 28
-    c.setFillColorRGB(0.00,0.20,0.55); c.roundRect(45,y-15,w-90,55,8,fill=1,stroke=0)
-    c.setFillColorRGB(1,1,1); c.setFont("Helvetica-Bold",15); c.drawString(65,y+7,"TOTAL PAGADO")
-    c.setFont("Helvetica-Bold",19); c.drawRightString(w-65,y+6,f"${p.amount:,.2f}")
-    y -= 75
+    wrapped_rows = [(label, wrap_ticket_text(value)) for label, value in rows]
+
+    pool_lines = []
     if p.pool_pass:
         pp = p.pool_pass
-        c.setFillColorRGB(.08,.14,.28); c.setFont("Helvetica-Bold",10); c.drawString(45,y,"Acceso de alberca:")
-        c.setFont("Helvetica",10); c.drawString(160,y,f"{pp.plan_type} · {pp.start_date.strftime('%d/%m/%Y')} al {pp.end_date.strftime('%d/%m/%Y')}")
-        y -= 24
+        pool_lines = wrap_ticket_text(
+            f"{pp.plan_type} · {pp.start_date.strftime('%d/%m/%Y')} al {pp.end_date.strftime('%d/%m/%Y')}"
+        )
+
+    allocations = []
     if p.debt_allocations:
-        c.setFillColorRGB(.08,.14,.28); c.setFont("Helvetica-Bold",10); c.drawString(45,y,"Aplicación del abono:")
-        y -= 18
         for alloc in p.debt_allocations[:8]:
             if alloc.target_type == "monthly":
                 target = db.get(MonthlyCharge, alloc.target_id)
@@ -812,11 +830,103 @@ def payment_receipt(payment_id: int, request: Request, db: Session = Depends(get
             else:
                 target = db.get(ManualDebt, alloc.target_id)
                 desc = target.concept if target else "Adeudo anterior"
-            c.setFont("Helvetica",9); c.drawString(60,y,desc[:52]); c.drawRightString(w-60,y,f"${alloc.amount:,.2f}")
-            y -= 16
-    c.setStrokeColorRGB(.55,.58,.65); c.line(70,125,270,125); c.line(w-270,125,w-70,125)
-    c.setFillColorRGB(.25,.28,.35); c.setFont("Helvetica",8); c.drawCentredString(170,110,"Recibí / Caja"); c.drawCentredString(w-170,110,"Socio")
-    c.setFont("Helvetica",7.5); c.drawCentredString(w/2,55,"Comprobante generado por el sistema de Club de Leones de Sabinas")
+            allocations.append((desc, alloc.amount))
+
+    row_height = sum(15 + (len(lines) * 10) for _, lines in wrapped_rows)
+    pool_height = (18 + len(pool_lines) * 10) if pool_lines else 0
+    allocation_height = (20 + len(allocations) * 13) if allocations else 0
+    ticket_height = max(115 * mm, 74 + row_height + 48 + pool_height + allocation_height + 70)
+
+    out = io.BytesIO()
+    c = canvas.Canvas(out, pagesize=(ticket_width, ticket_height))
+    c.setTitle(f"Recibo {p.folio}")
+    w, h = ticket_width, ticket_height
+    y = h - 8 * mm
+
+    # Encabezado en blanco y negro para impresión térmica limpia.
+    c.setFillColorRGB(0, 0, 0)
+    c.setFont("Helvetica-Bold", 12)
+    c.drawCentredString(w / 2, y, "CLUB DE LEONES")
+    y -= 12
+    c.setFont("Helvetica-Bold", 10)
+    c.drawCentredString(w / 2, y, "DE SABINAS")
+    y -= 12
+    c.setFont("Helvetica", 8)
+    c.drawCentredString(w / 2, y, "RECIBO DE PAGO")
+    y -= 12
+    c.setStrokeColorRGB(0, 0, 0)
+    c.setLineWidth(0.7)
+    c.line(margin, y, w - margin, y)
+    y -= 14
+
+    c.setFont("Helvetica-Bold", 9)
+    c.drawCentredString(w / 2, y, f"Folio: {p.folio}")
+    y -= 15
+
+    for label, lines in wrapped_rows:
+        c.setFont("Helvetica-Bold", 7.5)
+        c.drawString(margin, y, label.upper())
+        y -= 10
+        c.setFont("Helvetica", 8.5)
+        for line in lines:
+            c.drawString(margin, y, line)
+            y -= 10
+        y -= 5
+
+    c.line(margin, y, w - margin, y)
+    y -= 10
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(margin, y, "TOTAL PAGADO")
+    c.setFont("Helvetica-Bold", 15)
+    c.drawRightString(w - margin, y - 1, f"${p.amount:,.2f}")
+    y -= 18
+    c.line(margin, y, w - margin, y)
+    y -= 14
+
+    if pool_lines:
+        c.setFont("Helvetica-Bold", 7.5)
+        c.drawString(margin, y, "ACCESO DE ALBERCA")
+        y -= 10
+        c.setFont("Helvetica", 8)
+        for line in pool_lines:
+            c.drawString(margin, y, line)
+            y -= 10
+        y -= 5
+
+    if allocations:
+        c.setFont("Helvetica-Bold", 7.5)
+        c.drawString(margin, y, "APLICACIÓN DEL ABONO")
+        y -= 11
+        for desc, amount in allocations:
+            desc_lines = wrap_ticket_text(desc, 28)
+            c.setFont("Helvetica", 7.5)
+            c.drawString(margin, y, desc_lines[0])
+            c.drawRightString(w - margin, y, f"${amount:,.2f}")
+            y -= 11
+            for extra in desc_lines[1:]:
+                c.drawString(margin, y, extra)
+                y -= 10
+        y -= 4
+
+    y -= 8
+    half = w / 2
+    c.setLineWidth(0.6)
+    c.line(margin, y, half - 5 * mm, y)
+    c.line(half + 5 * mm, y, w - margin, y)
+    y -= 10
+    c.setFont("Helvetica", 6.5)
+    c.drawCentredString((margin + half - 5 * mm) / 2, y, "Caja")
+    c.drawCentredString((half + 5 * mm + w - margin) / 2, y, "Socio")
+    y -= 18
+
+    c.setFont("Helvetica", 6.2)
+    c.drawCentredString(w / 2, y, "Comprobante generado por el sistema")
+    y -= 8
+    c.drawCentredString(w / 2, y, "Club de Leones de Sabinas")
+    y -= 8
+    c.setFont("Helvetica-Bold", 6)
+    c.drawCentredString(w / 2, y, "Conserve este ticket como comprobante")
+
     c.showPage(); c.save(); out.seek(0)
     return StreamingResponse(out, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="recibo_{p.folio}.pdf"'})
 
