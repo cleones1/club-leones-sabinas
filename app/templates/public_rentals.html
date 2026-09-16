@@ -1,0 +1,64 @@
+{% extends "base.html" %}{% block title %}Renta al público · Club de Leones de Sabinas{% endblock %}{% block content %}
+<div class="page-head">
+  <div><span class="eyebrow">ADMINISTRACIÓN · CLIENTES EXTERNOS</span><h1>Renta de salones al público</h1></div>
+  <div class="actions"><a class="btn secondary" href="/admin/precios">Modificar precios</a><a class="btn secondary" href="/admin">← Panel</a></div>
+</div>
+
+{% if saved %}<div class="alert success">Renta registrada correctamente.</div>{% endif %}
+{% if payment_saved %}<div class="alert success">Movimiento registrado correctamente.</div>{% endif %}
+{% if deposit_updated %}<div class="alert success">Estatus del depósito actualizado.</div>{% endif %}
+{% if cancelled %}<div class="alert success">Renta cancelada. El registro se conserva en el historial.</div>{% endif %}
+{% if error %}<div class="alert danger">{{error}}</div>{% endif %}
+
+<div class="stats">
+  <div class="stat"><span>Rentas activas</span><b>{{active_count}}</b><small>Reservaciones vigentes.</small></div>
+  <div class="stat"><span>Cobros de renta</span><b>${{"{:,.2f}".format(rental_income)}}</b><small>Acumulado registrado a clientes externos.</small></div>
+  <div class="stat"><span>Depósitos en resguardo</span><b>${{"{:,.2f}".format(held_deposits)}}</b><small>No se consideran ingreso mientras estén en garantía.</small></div>
+</div>
+
+<section class="card">
+  <div class="section-title"><div><span class="eyebrow">NUEVA RESERVACIÓN</span><h2>Registrar renta</h2></div><span class="badge muted">Público general</span></div>
+  <p>El precio base y el depósito se cargan desde el panel de precios, pero puedes modificarlos para esta renta antes de guardarla.</p>
+  <form id="public-rental-form" class="compact-form" action="/admin/rentas-publico/nueva" method="post">
+    <label>Nombre de quien renta<input name="client_name" required></label>
+    <label>Teléfono<input name="phone" placeholder="Opcional"></label>
+    <label>Correo<input name="email" type="email" placeholder="Opcional"></label>
+    <label>Fecha del evento<input name="event_date" type="date" required></label>
+    <label class="wide">Salón<select id="public-hall" name="hall_key" required><option value="">Seleccionar...</option>{% for hall in halls %}<option value="{{hall.key}}" data-price="{{hall.price}}" data-deposit="{{hall.deposit}}">{{hall.name}} · renta ${{"{:,.2f}".format(hall.price)}} · garantía ${{"{:,.2f}".format(hall.deposit)}}</option>{% endfor %}</select></label>
+    <label>Precio de renta<input id="public-rental-price" name="rental_price" type="number" min="0" step="0.01" value="0.00" required></label>
+    <label>Depósito en garantía<input id="public-deposit-required" name="deposit_required" type="number" min="0" step="0.01" value="0.00" required></label>
+    <label>Pago inicial de renta<input name="initial_rent_payment" type="number" min="0" step="0.01" value="0.00"></label>
+    <label>Depósito recibido hoy<input name="initial_deposit_payment" type="number" min="0" step="0.01" value="0.00"></label>
+    <label>Método<select name="method"><option>Efectivo</option><option>Transferencia</option><option>Tarjeta</option><option>Otro</option></select></label>
+    <label>Referencia<input name="reference" placeholder="Folio, transferencia, etc."></label>
+    <label class="wide">Observaciones<textarea name="notes" placeholder="Condiciones, horario, responsable, detalles del evento..."></textarea></label>
+    <button type="submit">Registrar renta al público</button>
+  </form>
+  <small>El depósito en garantía queda identificado por separado. No forma parte del ingreso de renta mientras esté en resguardo.</small>
+</section>
+
+<section class="card">
+  <div class="section-title"><div><span class="eyebrow">CONTROL DE RENTAS</span><h2>Reservaciones e historial</h2></div></div>
+  <div class="table-wrap"><table><thead><tr><th>Evento / cliente</th><th>Salón</th><th>Renta</th><th>Depósito en garantía</th><th>Estatus</th><th>Movimientos</th></tr></thead><tbody>
+  {% for row in rows %}{% set r = row.rental %}
+    <tr>
+      <td><strong>{{r.event_date.strftime('%d/%m/%Y')}}</strong><small>{{r.client_name}}</small><small>{{r.phone or 'Sin teléfono'}}{% if r.email %} · {{r.email}}{% endif %}</small>{% if r.notes %}<small>{{r.notes}}</small>{% endif %}</td>
+      <td><strong>{{r.hall_name}}</strong><small>Registro #{{r.id}}</small></td>
+      <td><strong>${{"{:,.2f}".format(r.rental_price)}}</strong><small>Pagado: ${{"{:,.2f}".format(row.rent_paid)}}</small><small>Saldo: ${{"{:,.2f}".format(row.rent_balance)}}</small></td>
+      <td><strong>${{"{:,.2f}".format(r.deposit_required)}}</strong><small>Recibido: ${{"{:,.2f}".format(row.deposit_paid)}}</small><small>Falta recibir: ${{"{:,.2f}".format(row.deposit_balance)}}</small><span class="badge {{'success' if r.deposit_status == 'Devuelto' else ('danger' if r.deposit_status == 'Retenido' else ('warning' if r.deposit_status == 'En resguardo' else 'muted'))}}">{{r.deposit_status}}</span></td>
+      <td><span class="badge {{'success' if r.status == 'Activa' else 'muted'}}">{{r.status}}</span>{% if row.rent_balance == 0 %}<small><b>Renta liquidada</b></small>{% else %}<small>Renta pendiente</small>{% endif %}</td>
+      <td>
+      {% if r.status == 'Activa' %}
+        {% if row.rent_balance > 0 %}<form class="compact-form" action="/admin/rentas-publico/{{r.id}}/pago" method="post"><input type="hidden" name="payment_type" value="renta"><label>Abono renta<input name="amount" type="number" min="0.01" max="{{row.rent_balance}}" step="0.01" required></label><label>Método<select name="method"><option>Efectivo</option><option>Transferencia</option><option>Tarjeta</option><option>Otro</option></select></label><label>Referencia<input name="reference"></label><button>Registrar abono</button></form>{% endif %}
+        {% if row.deposit_balance > 0 and r.deposit_status not in ['Devuelto','Retenido'] %}<form class="compact-form" action="/admin/rentas-publico/{{r.id}}/pago" method="post"><input type="hidden" name="payment_type" value="garantia"><label>Recibir garantía<input name="amount" type="number" min="0.01" max="{{row.deposit_balance}}" step="0.01" required></label><label>Método<select name="method"><option>Efectivo</option><option>Transferencia</option><option>Tarjeta</option><option>Otro</option></select></label><label>Referencia<input name="reference"></label><button class="secondary">Registrar depósito</button></form>{% endif %}
+        {% if row.deposit_paid > 0 %}<form class="compact-form" action="/admin/rentas-publico/{{r.id}}/deposito" method="post"><label>Estatus garantía<select name="deposit_status"><option value="En resguardo" {{'selected' if r.deposit_status == 'En resguardo' else ''}}>En resguardo</option><option value="Devuelto" {{'selected' if r.deposit_status == 'Devuelto' else ''}}>Devuelto al cliente</option><option value="Retenido" {{'selected' if r.deposit_status == 'Retenido' else ''}}>Retenido por daños/cargos</option></select></label><button class="secondary">Actualizar garantía</button></form>{% endif %}
+        <form action="/admin/rentas-publico/{{r.id}}/cancelar" method="post" onsubmit="return confirm('¿Cancelar esta renta? El historial y los movimientos se conservarán.');"><button class="secondary">Cancelar renta</button></form>
+      {% else %}<small>Sin movimientos nuevos.</small>{% endif %}
+      {% if r.payments %}<details><summary>Historial ({{r.payments|length}})</summary>{% for p in r.payments %}<small>{{p.paid_at.strftime('%d/%m/%Y %H:%M')}} · {{'Renta' if p.payment_type == 'renta' else 'Garantía'}} · ${{"{:,.2f}".format(p.amount)}} · {{p.method}}{% if p.reference %} · {{p.reference}}{% endif %}</small>{% endfor %}</details>{% endif %}
+      </td>
+    </tr>
+  {% else %}<tr><td colspan="6">Todavía no hay rentas al público registradas.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}
+{% block scripts %}<script>(function(){const hall=document.getElementById('public-hall'),price=document.getElementById('public-rental-price'),deposit=document.getElementById('public-deposit-required');if(!hall||!price||!deposit)return;hall.addEventListener('change',function(){const opt=hall.options[hall.selectedIndex];price.value=Number(opt?.dataset?.price||0).toFixed(2);deposit.value=Number(opt?.dataset?.deposit||0).toFixed(2);});})();</script>{% endblock %}

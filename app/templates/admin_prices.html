@@ -4,7 +4,7 @@
   <div class="actions"><a class="btn secondary" href="/admin">← Panel</a></div>
 </div>
 
-{% if saved %}<div class="alert success">Precios actualizados correctamente. Los nuevos importes ya se usan en ventas y rentas nuevas.</div>{% endif %}
+{% if saved %}<div class="alert success">Precios actualizados correctamente. Los nuevos importes ya se usan en operaciones nuevas.</div>{% endif %}
 
 <section class="card">
   <div class="section-title">
@@ -16,16 +16,13 @@
   <form action="/admin/precios" method="post">
     <div class="detail-grid">
       <section>
-        <h2>Renta de instalaciones</h2>
+        <h2>Renta de instalaciones a socios</h2>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Concepto</th><th>Precio</th></tr></thead>
             <tbody>
             {% for item in rentals %}
-              <tr>
-                <td><strong>{{item.label}}</strong><small>{{item.group}}</small></td>
-                <td><label>$ <input name="{{item.key}}" type="number" min="0" step="0.01" value="{{'%.2f'|format(item.value)}}" required></label></td>
-              </tr>
+              <tr><td><strong>{{item.label}}</strong><small>{{item.group}}</small></td><td><label>$ <input name="{{item.key}}" type="number" min="0" step="0.01" value="{{'%.2f'|format(item.value)}}" required></label></td></tr>
             {% endfor %}
             </tbody>
           </table>
@@ -39,10 +36,7 @@
             <thead><tr><th>Concepto</th><th>Precio</th></tr></thead>
             <tbody>
             {% for item in sales %}
-              <tr>
-                <td><strong>{{item.label}}</strong><small>{{item.group}}</small>{% if item.key == 'price_sale_uso_loza' %}<small>En $0 permanece como precio manual.</small>{% endif %}</td>
-                <td><label>$ <input name="{{item.key}}" type="number" min="0" step="0.01" value="{{'%.2f'|format(item.value)}}" required></label></td>
-              </tr>
+              <tr><td><strong>{{item.label}}</strong><small>{{item.group}}</small>{% if item.key == 'price_sale_uso_loza' %}<small>En $0 permanece como precio manual.</small>{% endif %}</td><td><label>$ <input name="{{item.key}}" type="number" min="0" step="0.01" value="{{'%.2f'|format(item.value)}}" required></label></td></tr>
             {% endfor %}
             </tbody>
           </table>
@@ -51,10 +45,23 @@
     </div>
 
     <hr>
-    <div class="actions">
-      <button type="submit">Guardar todos los precios</button>
-      <a class="btn secondary" href="/admin">Cancelar</a>
-    </div>
+    <section>
+      <div class="section-title"><div><span class="eyebrow">CLIENTES EXTERNOS</span><h2>Renta de salones al público</h2></div><a class="mini-btn" href="/admin/rentas-publico">Abrir módulo de rentas →</a></div>
+      <p>Configura el precio base de renta y el depósito en garantía de cada salón. El depósito se administra por separado y no se considera ingreso mientras esté en resguardo.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Concepto</th><th>Tipo</th><th>Importe</th></tr></thead>
+          <tbody>
+          {% for item in public_rentals %}
+            <tr><td><strong>{{item.label}}</strong></td><td><span class="badge {{'warning' if item.group == 'Depósito en garantía' else 'muted'}}">{{item.group}}</span></td><td><label>$ <input name="{{item.key}}" type="number" min="0" step="0.01" value="{{'%.2f'|format(item.value)}}" required></label></td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <hr>
+    <div class="actions"><button type="submit">Guardar todos los precios</button><a class="btn secondary" href="/admin">Cancelar</a></div>
   </form>
 </section>
 {% endblock %}

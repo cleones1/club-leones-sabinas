@@ -48,7 +48,18 @@ SALE_PRICES = [
     {"key":"price_sale_mantel_rectangular","label":"Mantel rectangular","desc":"Mantel rectangular","default":40.00,"group":"Servicios y artículos"},
     {"key":"price_sale_uso_loza","label":"Uso de loza","desc":"Uso de loza","default":0.00,"group":"Servicios y artículos"},
 ]
-ALL_PRICES = RENTAL_PRICES + SALE_PRICES
+
+PUBLIC_RENTAL_PRICES = [
+    {"key":"price_public_fundadores","label":"Salón Fundadores · precio al público","desc":"Salón Fundadores","default":0.00,"group":"Precio de renta"},
+    {"key":"deposit_public_fundadores","label":"Salón Fundadores · depósito en garantía","desc":"Salón Fundadores","default":0.00,"group":"Depósito en garantía"},
+    {"key":"price_public_damas","label":"Salón Damas · precio al público","desc":"Salón Damas","default":0.00,"group":"Precio de renta"},
+    {"key":"deposit_public_damas","label":"Salón Damas · depósito en garantía","desc":"Salón Damas","default":0.00,"group":"Depósito en garantía"},
+    {"key":"price_public_presidentes","label":"Salón Presidentes · precio al público","desc":"Salón Presidentes","default":0.00,"group":"Precio de renta"},
+    {"key":"deposit_public_presidentes","label":"Salón Presidentes · depósito en garantía","desc":"Salón Presidentes","default":0.00,"group":"Depósito en garantía"},
+]
+
+ALL_PRICES = RENTAL_PRICES + SALE_PRICES + PUBLIC_RENTAL_PRICES
+
 
 def require_admin(request: Request, db: Session):
     uid = request.session.get("user_id")
@@ -57,8 +68,10 @@ def require_admin(request: Request, db: Session):
         raise HTTPException(403)
     return user
 
+
 def _setting(db: Session, key: str):
     return db.query(ClubSetting).filter(ClubSetting.key == key).first()
+
 
 def _value(db: Session, item):
     row = _setting(db, item["key"])
@@ -66,6 +79,7 @@ def _value(db: Session, item):
         return round(float(row.value), 2) if row else round(float(item["default"]), 2)
     except (TypeError, ValueError):
         return round(float(item["default"]), 2)
+
 
 def ensure_price_settings(db: Session):
     changed = False
@@ -76,8 +90,10 @@ def ensure_price_settings(db: Session):
     if changed:
         db.commit()
 
+
 def _items_with_values(db: Session, definitions):
     return [{**item, "value": _value(db, item)} for item in definitions]
+
 
 @router.get("/admin/precios", response_class=HTMLResponse)
 def prices_page(request: Request, db: Session = Depends(get_db)):
@@ -87,8 +103,10 @@ def prices_page(request: Request, db: Session = Depends(get_db)):
         "request": request,
         "rentals": _items_with_values(db, RENTAL_PRICES),
         "sales": _items_with_values(db, SALE_PRICES),
+        "public_rentals": _items_with_values(db, PUBLIC_RENTAL_PRICES),
         "saved": request.query_params.get("guardado") == "1",
     })
+
 
 @router.post("/admin/precios")
 async def save_prices(request: Request, db: Session = Depends(get_db)):
@@ -111,6 +129,7 @@ async def save_prices(request: Request, db: Session = Depends(get_db)):
     db.commit()
     return RedirectResponse("/admin/precios?guardado=1", 303)
 
+
 @router.get("/admin/precios/data")
 def prices_data(request: Request, db: Session = Depends(get_db)):
     require_admin(request, db)
@@ -118,4 +137,5 @@ def prices_data(request: Request, db: Session = Depends(get_db)):
     return {
         "rentals": {item["desc"]: _value(db, item) for item in RENTAL_PRICES},
         "sales": {item["desc"]: _value(db, item) for item in SALE_PRICES},
+        "public_rentals": {item["key"]: _value(db, item) for item in PUBLIC_RENTAL_PRICES},
     }
