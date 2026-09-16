@@ -1,0 +1,60 @@
+{% extends "base.html" %}{% block title %}Precios · Club de Leones de Sabinas{% endblock %}{% block content %}
+<div class="page-head">
+  <div><span class="eyebrow">ADMINISTRACIÓN · TARIFAS</span><h1>Precios de venta y renta</h1></div>
+  <div class="actions"><a class="btn secondary" href="/admin">← Panel</a></div>
+</div>
+
+{% if saved %}<div class="alert success">Precios actualizados correctamente. Los nuevos importes ya se usan en ventas y rentas nuevas.</div>{% endif %}
+
+<section class="card">
+  <div class="section-title">
+    <div><span class="eyebrow">CONTROL CENTRAL</span><h2>Modificar tarifas</h2></div>
+    <span class="badge success">Guardado en base de datos</span>
+  </div>
+  <p>Los cambios aplican a operaciones nuevas. Los pagos, adeudos y recibos ya registrados conservan el importe histórico con el que fueron capturados.</p>
+
+  <form action="/admin/precios" method="post">
+    <div class="detail-grid">
+      <section>
+        <h2>Renta de instalaciones</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Concepto</th><th>Precio</th></tr></thead>
+            <tbody>
+            {% for item in rentals %}
+              <tr>
+                <td><strong>{{item.label}}</strong><small>{{item.group}}</small></td>
+                <td><label>$ <input name="{{item.key}}" type="number" min="0" step="0.01" value="{{'%.2f'|format(item.value)}}" required></label></td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>Venta a socios</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Concepto</th><th>Precio</th></tr></thead>
+            <tbody>
+            {% for item in sales %}
+              <tr>
+                <td><strong>{{item.label}}</strong><small>{{item.group}}</small>{% if item.key == 'price_sale_uso_loza' %}<small>En $0 permanece como precio manual.</small>{% endif %}</td>
+                <td><label>$ <input name="{{item.key}}" type="number" min="0" step="0.01" value="{{'%.2f'|format(item.value)}}" required></label></td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <hr>
+    <div class="actions">
+      <button type="submit">Guardar todos los precios</button>
+      <a class="btn secondary" href="/admin">Cancelar</a>
+    </div>
+  </form>
+</section>
+{% endblock %}
