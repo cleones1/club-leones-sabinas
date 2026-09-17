@@ -2,13 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from datetime import date
+import calendar
 import io
 
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
 
 from .database import get_db, SessionLocal
-from .models import ClubSetting, MonthlyCharge, Payment
+from .models import ClubSetting, MonthlyCharge, Payment, PoolPass
 from .core import auth_user, member_billing_type, period_label
 
 router = APIRouter()
@@ -106,6 +107,60 @@ def _plan_from_payment(payment: Payment):
     if "trimestral" in text:
         return "Trimestral", 3
     return "Mensual", 1
+
+
+POOL_ACCESS_MIGRATION_KEY = "dues_pool_access_v1"
+
+
+def backfill_dues_pool_access_once():
+    """Convierte cuotas ya pagadas en vigencias de alberca sin cobrar de nuevo."""
+    db = SessionLocal()
+    try:
+        if db.query(ClubSetting).filter(ClubSetting.key == POOL_ACCESS_MIGRATION_KEY).first():
+            return
+
+        payments = db.query(Payment).filter(Payment.concept.like("Cuota de socio%")).all()
+        for payment in payments:
+            if db.query(PoolPass).filter(PoolPass.payment_id == payment.id).first():
+                continue
+
+            periods = []
+            for allocation in payment.debt_allocations or []:
+                if allocation.target_type != "monthly":
+                    continue
+                charge = db.get(MonthlyCharge, allocation.target_id)
+                if charge and charge.period:
+                    periods.append(charge.period)
+
+            periods = sorted(set(periods))
+            if not periods:
+                continue
+
+            first_year, first_month = [int(x) for x in periods[0].split("-")]
+            last_year, last_month = [int(x) for x in periods[-1].split("-")]
+            start = date(first_year, first_month, 1)
+            end = date(last_year, last_month, calendar.monthrange(last_year, last_month)[1])
+            plan_name, _ = _plan_from_payment(payment)
+
+            db.add(PoolPass(
+                member_id=payment.member_id,
+                payment_id=payment.id,
+                plan_type=plan_name,
+                start_date=start,
+                end_date=end,
+                amount=0,
+            ))
+
+        _set_setting(db, POOL_ACCESS_MIGRATION_KEY, "1")
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+backfill_dues_pool_access_once()
 
 
 @router.get("/recibo-cuota/{payment_id}.pdf")

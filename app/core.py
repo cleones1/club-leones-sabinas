@@ -608,6 +608,24 @@ def pay_member_dues(member_id: int, request: Request, plan: str = Form(...), sta
     for charge, balance in targets:
         charge.paid_amount = round((charge.paid_amount or 0) + balance, 2)
         db.add(DebtPaymentAllocation(payment_id=payment.id, target_type="monthly", target_id=charge.id, amount=balance))
+
+    # El acceso de alberca ya está incluido en la cuota del socio.
+    # La vigencia sigue exactamente los meses cubiertos por este pago.
+    access_start = month_start_from_period(first_period)
+    access_last_month = month_start_from_period(last_period)
+    access_end = date(
+        access_last_month.year,
+        access_last_month.month,
+        calendar.monthrange(access_last_month.year, access_last_month.month)[1],
+    )
+    db.add(PoolPass(
+        member_id=m.id,
+        payment_id=payment.id,
+        plan_type=plan,
+        start_date=access_start,
+        end_date=access_end,
+        amount=0,
+    ))
     db.commit()
     return RedirectResponse(f"/admin/socios/{m.id}?cuota_pago={payment.id}", 303)
 
