@@ -1,5 +1,10 @@
 from . import public_models  # Registra tablas de rentas públicas antes de create_all.
 from .core import app
+from .test_cleanup import run_test_cleanup_once
+
+# Limpieza única solicitada antes de iniciar operación real.
+run_test_cleanup_once()
+
 from .admin_tools import router as admin_tools_router
 from .dues_tools import router as dues_tools_router
 from .pricing_tools import router as pricing_tools_router
