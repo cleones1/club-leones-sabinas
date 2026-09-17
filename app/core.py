@@ -18,6 +18,7 @@ from reportlab.lib.utils import ImageReader
 
 from .database import Base, engine, get_db, SessionLocal
 from .models import Member, MemberPhoto, FamilyMember, Membership, Payment, PoolPass, ClubSetting, MemberBillingProfile, MonthlyCharge, ManualDebt, DebtPaymentAllocation, User
+from .public_models import PublicRental, PublicRentalPayment
 from .auth import hash_password, verify_password
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -220,6 +221,132 @@ def period_label(period: str):
         return period
 
 
+INCOME_CATEGORIES = (
+    "Cuotas y recargos",
+    "Coronación",
+    "Posada",
+    "Rentas a socios",
+    "Rentas de salones al público",
+    "Ventas a socios",
+    "Actividades Damas y Leones",
+    "Cargos adicionales",
+    "Otros ingresos",
+)
+
+
+def _optional_dues_charges(concept: str):
+    found = {"Coronación": 0.0, "Posada": 0.0}
+    for piece in (concept or "").split("·"):
+        item = piece.strip()
+        for label in ("Coronación", "Posada"):
+            prefix = f"{label} $"
+            if item.startswith(prefix):
+                try:
+                    found[label] = round(float(item[len(prefix):].strip()), 2)
+                except (TypeError, ValueError):
+                    pass
+    return found
+
+
+def _income_category_from_concept(concept: str):
+    text = (concept or "").strip().lower()
+    if text.startswith("renta "):
+        return "Rentas a socios"
+    if text.startswith("venta a socio"):
+        return "Ventas a socios"
+    if text.startswith("actividad damas y leones"):
+        return "Actividades Damas y Leones"
+    if text.startswith("cargo extra"):
+        return "Cargos adicionales"
+    if "coronación" in text or "coronacion" in text:
+        return "Coronación"
+    if "posada" in text:
+        return "Posada"
+    if text.startswith("cuota de socio") or text.startswith("mensualidad"):
+        return "Cuotas y recargos"
+    return "Otros ingresos"
+
+
+def income_breakdown(db: Session, start_at: datetime | None = None, end_at: datetime | None = None):
+    totals = {name: 0.0 for name in INCOME_CATEGORIES}
+    q = db.query(Payment)
+    if start_at is not None:
+        q = q.filter(Payment.paid_at >= start_at)
+    if end_at is not None:
+        q = q.filter(Payment.paid_at < end_at)
+
+    for payment in q.all():
+        amount = round(float(payment.amount or 0), 2)
+        if amount <= 0:
+            continue
+
+        # Una cuota puede contener Coronación y/o Posada dentro del mismo recibo.
+        if (payment.concept or "").startswith("Cuota de socio"):
+            extras = _optional_dues_charges(payment.concept)
+            coronacion = min(amount, extras["Coronación"])
+            posada = min(max(0.0, amount - coronacion), extras["Posada"])
+            allocated_monthly = round(sum(
+                float(a.amount or 0)
+                for a in (payment.debt_allocations or [])
+                if a.target_type == "monthly"
+            ), 2)
+            dues_amount = allocated_monthly or max(0.0, round(amount - coronacion - posada, 2))
+            totals["Cuotas y recargos"] += dues_amount
+            totals["Coronación"] += coronacion
+            totals["Posada"] += posada
+            remainder = round(amount - dues_amount - coronacion - posada, 2)
+            if remainder > 0.009:
+                totals["Otros ingresos"] += remainder
+            continue
+
+        # Los abonos a adeudos se clasifican según el rubro original del saldo.
+        allocations = list(payment.debt_allocations or [])
+        if allocations:
+            allocated = 0.0
+            for allocation in allocations:
+                part = round(float(allocation.amount or 0), 2)
+                if part <= 0:
+                    continue
+                allocated += part
+                if allocation.target_type == "monthly":
+                    category = "Cuotas y recargos"
+                else:
+                    debt = db.get(ManualDebt, allocation.target_id)
+                    category = _income_category_from_concept(debt.concept if debt else "")
+                totals[category] += part
+            remainder = round(amount - allocated, 2)
+            if remainder > 0.009:
+                totals["Otros ingresos"] += remainder
+            continue
+
+        totals[_income_category_from_concept(payment.concept)] += amount
+
+    # Rentas al público: sólo los pagos de renta son ingreso.
+    public_q = db.query(PublicRentalPayment).filter(PublicRentalPayment.payment_type == "renta")
+    if start_at is not None:
+        public_q = public_q.filter(PublicRentalPayment.paid_at >= start_at)
+    if end_at is not None:
+        public_q = public_q.filter(PublicRentalPayment.paid_at < end_at)
+    totals["Rentas de salones al público"] += round(sum(float(p.amount or 0) for p in public_q.all()), 2)
+
+    return {name: round(value, 2) for name, value in totals.items()}
+
+
+def guarantee_balances(db: Session):
+    held = 0.0
+    retained = 0.0
+    rentals = db.query(PublicRental).all()
+    for rental in rentals:
+        received = round(sum(
+            float(p.amount or 0) for p in rental.payments if p.payment_type == "garantia"
+        ), 2)
+        if rental.deposit_status == "En resguardo":
+            held += received
+        elif rental.deposit_status == "Retenido":
+            retained += received
+    return round(held, 2), round(retained, 2)
+
+
 def auth_user(request: Request, db: Session):
     uid = request.session.get("user_id")
     return db.get(User, uid) if uid else None
@@ -409,7 +536,13 @@ def admin_dashboard(request: Request, db: Session = Depends(get_db)):
     suspended = len(members) - active
     debt_map = {m.id: member_debt_total(db, m.id) for m in members}
     month_start = date.today().replace(day=1)
-    income = db.query(func.coalesce(func.sum(Payment.amount),0)).filter(Payment.paid_at >= datetime.combine(month_start, datetime.min.time())).scalar()
+    next_month_date = shift_months(month_start, 1)
+    income_map = income_breakdown(
+        db,
+        datetime.combine(month_start, datetime.min.time()),
+        datetime.combine(next_month_date, datetime.min.time()),
+    )
+    income = round(sum(income_map.values()), 2)
     total_debt = round(sum(debt_map.values()), 2)
     return templates.TemplateResponse("admin_dashboard.html", {
         "request": request, "members": members, "status_fn": member_status, "latest_fn": latest_membership,
@@ -685,8 +818,32 @@ def finance_dashboard(request: Request, db: Session = Depends(get_db)):
         balance = member_debt_total(db, member.id)
         if balance > 0:
             debtors.append((member, balance)); total_debt += balance
+
     today = date.today()
-    return templates.TemplateResponse("finance_dashboard.html", {"request": request, "monthly_fee": monthly_fee_amount(db, "Regular"), "monthly_fee_pensionado": monthly_fee_amount(db, "Pensionado"), "member_type_map": {m.id: member_billing_type(db, m.id) for m in members}, "debtors": debtors, "total_debt": round(total_debt, 2), "period": f"{SPANISH_MONTHS[today.month]} {today.year}", "saved": request.query_params.get("guardado") == "1"})
+    month_start = datetime(today.year, today.month, 1)
+    next_month_date = shift_months(date(today.year, today.month, 1), 1)
+    next_month = datetime(next_month_date.year, next_month_date.month, 1)
+    income_month = income_breakdown(db, month_start, next_month)
+    income_all = income_breakdown(db)
+    held_guarantees, retained_guarantees = guarantee_balances(db)
+
+    return templates.TemplateResponse("finance_dashboard.html", {
+        "request": request,
+        "monthly_fee": monthly_fee_amount(db, "Regular"),
+        "monthly_fee_pensionado": monthly_fee_amount(db, "Pensionado"),
+        "member_type_map": {m.id: member_billing_type(db, m.id) for m in members},
+        "debtors": debtors,
+        "total_debt": round(total_debt, 2),
+        "period": f"{SPANISH_MONTHS[today.month]} {today.year}",
+        "saved": request.query_params.get("guardado") == "1",
+        "income_categories": INCOME_CATEGORIES,
+        "income_month": income_month,
+        "income_all": income_all,
+        "income_month_total": round(sum(income_month.values()), 2),
+        "income_all_total": round(sum(income_all.values()), 2),
+        "held_guarantees": held_guarantees,
+        "retained_guarantees": retained_guarantees,
+    })
 
 
 @app.post("/admin/finanzas/mensualidad")
