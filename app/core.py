@@ -559,7 +559,7 @@ def add_membership(member_id: int, request: Request, membership_type: str = Form
 
 
 @app.post("/admin/socios/{member_id}/cuota/pagar")
-def pay_member_dues(member_id: int, request: Request, plan: str = Form(...), start_period: str = Form(""), method: str = Form(...), reference: str = Form(""), db: Session = Depends(get_db)):
+def pay_member_dues(member_id: int, request: Request, plan: str = Form(...), start_period: str = Form(""), method: str = Form(...), reference: str = Form(""), coronacion_amount: float = Form(0), posada_amount: float = Form(0), db: Session = Depends(get_db)):
     require_admin(request, db)
     sync_finances(db)
     m = db.get(Member, member_id)
@@ -595,7 +595,10 @@ def pay_member_dues(member_id: int, request: Request, plan: str = Form(...), sta
         attempts += 1
     if len(targets) < months_to_cover:
         raise HTTPException(400, "No fue posible determinar todos los periodos de la cuota seleccionada.")
-    total = round(sum(balance for _, balance in targets), 2)
+    dues_total = round(sum(balance for _, balance in targets), 2)
+    coronacion_amount = round(max(0.0, coronacion_amount or 0), 2)
+    posada_amount = round(max(0.0, posada_amount or 0), 2)
+    total = round(dues_total + coronacion_amount + posada_amount, 2)
     first_period = targets[0][0].period
     last_period = targets[-1][0].period
     next_id = (db.query(func.max(Payment.id)).scalar() or 0) + 1
@@ -603,7 +606,12 @@ def pay_member_dues(member_id: int, request: Request, plan: str = Form(...), sta
     extra = (reference or "").strip()
     if extra:
         note += f" · {extra}"
-    payment = Payment(member_id=m.id, folio=f"PAG-{next_id:06d}", concept=f"Cuota de socio · {plan}", amount=total, method=method, reference=note[:120])
+    concept_parts = [f"Cuota de socio · {plan}"]
+    if coronacion_amount > 0:
+        concept_parts.append(f"Coronación ${coronacion_amount:.2f}")
+    if posada_amount > 0:
+        concept_parts.append(f"Posada ${posada_amount:.2f}")
+    payment = Payment(member_id=m.id, folio=f"PAG-{next_id:06d}", concept=" · ".join(concept_parts), amount=total, method=method, reference=note[:120])
     db.add(payment); db.flush()
     for charge, balance in targets:
         charge.paid_amount = round((charge.paid_amount or 0) + balance, 2)

@@ -109,6 +109,22 @@ def _plan_from_payment(payment: Payment):
     return "Mensual", 1
 
 
+def _optional_charges_from_payment(payment: Payment):
+    charges = []
+    for piece in (payment.concept or "").split("·"):
+        item = piece.strip()
+        for label in ("Coronación", "Posada"):
+            prefix = f"{label} $"
+            if item.startswith(prefix):
+                try:
+                    amount = round(float(item[len(prefix):].strip()), 2)
+                except (TypeError, ValueError):
+                    amount = 0.0
+                if amount > 0:
+                    charges.append((label, amount))
+    return charges
+
+
 POOL_ACCESS_MIGRATION_KEY = "dues_pool_access_v1"
 
 
@@ -187,7 +203,9 @@ def dues_receipt(payment_id: int, request: Request, db: Session = Depends(get_db
     months = max(1, months)
 
     expected = round(monthly_total * months, 2)
-    adjustment = round(payment.amount - expected, 2)
+    optional_charges = _optional_charges_from_payment(payment)
+    optional_total = round(sum(amount for _, amount in optional_charges), 2)
+    adjustment = round(payment.amount - expected - optional_total, 2)
 
     period_lines = []
     if monthly_allocations:
@@ -204,7 +222,7 @@ def dues_receipt(payment_id: int, request: Request, db: Session = Depends(get_db
 
     ticket_width = 80 * mm
     margin = 5 * mm
-    extra_lines = len(breakdown) + (1 if abs(adjustment) >= 0.01 else 0)
+    extra_lines = len(breakdown) + len(optional_charges) + (1 if abs(adjustment) >= 0.01 else 0)
     ticket_height = max(175 * mm, (145 + extra_lines * 14 + len(period_lines) * 10) * 1.0)
 
     out = io.BytesIO()
@@ -272,6 +290,18 @@ def dues_receipt(payment_id: int, request: Request, db: Session = Depends(get_db
     c.drawString(margin, y, "BASE MENSUAL")
     c.drawRightString(w - margin, y, f"${monthly_total:,.2f}")
     y -= 12
+
+    if optional_charges:
+        y -= 2
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(margin, y, "CARGOS OPCIONALES")
+        y -= 11
+        c.setFont("Helvetica", 7.7)
+        for label, amount in optional_charges:
+            c.drawString(margin, y, label)
+            c.drawRightString(w - margin, y, f"${amount:,.2f}")
+            y -= 11
+        y -= 1
 
     if abs(adjustment) >= 0.01:
         c.setFont("Helvetica", 7.3)

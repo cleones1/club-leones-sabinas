@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% block title %}{{m.member_number}} · Club de Leones de Sabinas{% endblock %}{% block content %}
 <div class="page-head"><div><span class="eyebrow">{{m.member_number}} · CLUB DE LEONES DE SABINAS</span><h1>{{m.first_name}} {{m.last_name}}</h1></div><div class="actions"><a class="btn secondary" href="/credencial/{{m.id}}.pdf">Credencial socio</a>{% if pool[2] %}<a class="btn" href="/credencial-alberca/{{m.id}}.pdf">Credenciales alberca</a>{% endif %}<a href="/admin">← Panel</a></div></div>
 {% if family_saved %}<div class="alert success">Familia guardada correctamente. Esposa e hijos registrados aparecen abajo.</div>{% endif %}
-{% if dues_payment_id %}<div class="alert success">Cuota registrada correctamente. <a target="_blank" href="/recibo/{{dues_payment_id}}.pdf"><b>Imprimir recibo</b></a></div>{% endif %}
+{% if dues_payment_id %}<div class="alert success">Cuota registrada correctamente. <a target="_blank" href="/recibo-cuota/{{dues_payment_id}}.pdf"><b>Imprimir recibo</b></a></div>{% endif %}
 
 <div class="detail-grid">
 <section class="card"><h2>Estado general</h2><div class="member-status"><span class="badge {{status[1]}}">{{status[0]}}</span><b>Permanente</b><small>Membresía del club</small></div><hr><p><b>Número interno:</b> {{m.member_number}}</p><p><b>Tipo de socio:</b> <span class="badge {{'warning' if member_type == 'Pensionado' else 'muted'}}">{{member_type}}</span></p><p><b>Cuota mensual:</b> ${{"{:,.2f}".format(member_monthly_fee)}}</p><p><b>Cuota trimestral:</b> ${{"{:,.2f}".format(member_monthly_fee * 3)}}</p><p><b>Cuota anual:</b> ${{"{:,.2f}".format(member_monthly_fee * 12)}}</p><p><b>Correo:</b> {{m.email}}</p><p><b>Teléfono:</b> {{m.phone or '—'}}</p><p><b>Dirección:</b> {{m.address or '—'}}</p><form action="/admin/socios/{{m.id}}/toggle" method="post"><button class="secondary">{{'Suspender socio' if m.active else 'Reactivar socio'}}</button></form></section>
@@ -31,11 +31,13 @@
 <label>Mes inicial<input id="dues-start" name="start_period" type="month" required></label>
 <label>Cuota mensual<input value="${{"{:,.2f}".format(member_monthly_fee)}}" readonly></label>
 <label>Total estimado<input id="dues-total" readonly></label>
+<label><span><input id="dues-coronacion-enabled" type="checkbox"> Agregar Coronación</span><input id="dues-coronacion" name="coronacion_amount" type="number" min="0" step="0.01" value="0.00" disabled placeholder="Importe"></label>
+<label><span><input id="dues-posada-enabled" type="checkbox"> Agregar Posada</span><input id="dues-posada" name="posada_amount" type="number" min="0" step="0.01" value="0.00" disabled placeholder="Importe"></label>
 <label>Método<select name="method" required><option>Efectivo</option><option>Transferencia</option><option>Tarjeta</option><option>Otro</option></select></label>
 <label class="wide">Referencia / nota<input name="reference" placeholder="Opcional"></label>
 <button type="submit">Registrar pago de cuota</button>
 </form>
-<small>Mensual cubre 1 cuota, Trimestral 3 y Anual 12. Si un mes ya está pagado, el sistema avanza al siguiente mes pendiente. Si el periodo elegido tiene recargo, el total final puede ser mayor al estimado.</small>
+<small>Mensual cubre 1 cuota, Trimestral 3 y Anual 12. Coronación y Posada son cargos opcionales: actívalos sólo cuando correspondan y captura el importe. Ambos aparecerán separados en el recibo. Si el periodo elegido tiene recargo, el total final puede ser mayor al estimado.</small>
 </section>
 
 <section class="card" id="renta-instalaciones">
@@ -93,7 +95,7 @@
 
 <section class="card"><h2>Membresía del club</h2><div class="member-status"><span class="badge success">Permanente</span><b>Sin vencimiento</b><small>Las cuotas mensual, trimestral o anual no cambian la permanencia de la membresía y ya incluyen el acceso a la alberca durante el periodo pagado.</small></div></section>
 
-<section class="card"><h2>Historial de pagos</h2><div class="table-wrap"><table><thead><tr><th>Folio</th><th>Fecha</th><th>Concepto</th><th>Método</th><th>Importe</th><th>Acceso alberca</th><th>Recibo</th></tr></thead><tbody>{% for p in m.payments|sort(attribute='paid_at', reverse=true) %}<tr><td>{{p.folio}}</td><td>{{p.paid_at.strftime('%d/%m/%Y')}}</td><td>{{p.concept}}</td><td>{{p.method}}</td><td>${{"{:,.2f}".format(p.amount)}}</td><td>{% if p.pool_pass %}{{p.pool_pass.plan_type}}<small>{{p.pool_pass.end_date.strftime('%d/%m/%Y')}}</small>{% else %}—{% endif %}</td><td><a class="mini-btn" target="_blank" href="/recibo/{{p.id}}.pdf">Imprimir</a></td></tr>{% else %}<tr><td colspan="7">Sin pagos registrados.</td></tr>{% endfor %}</tbody></table></div></section>
+<section class="card"><h2>Historial de pagos</h2><div class="table-wrap"><table><thead><tr><th>Folio</th><th>Fecha</th><th>Concepto</th><th>Método</th><th>Importe</th><th>Acceso alberca</th><th>Recibo</th></tr></thead><tbody>{% for p in m.payments|sort(attribute='paid_at', reverse=true) %}<tr><td>{{p.folio}}</td><td>{{p.paid_at.strftime('%d/%m/%Y')}}</td><td>{{p.concept}}</td><td>{{p.method}}</td><td>${{"{:,.2f}".format(p.amount)}}</td><td>{% if p.pool_pass %}{{p.pool_pass.plan_type}}<small>{{p.pool_pass.end_date.strftime('%d/%m/%Y')}}</small>{% else %}—{% endif %}</td><td>{% if p.concept.startswith('Cuota de socio') %}<a class="mini-btn" target="_blank" href="/recibo-cuota/{{p.id}}.pdf">Imprimir</a>{% else %}<a class="mini-btn" target="_blank" href="/recibo/{{p.id}}.pdf">Imprimir</a>{% endif %}</td></tr>{% else %}<tr><td colspan="7">Sin pagos registrados.</td></tr>{% endfor %}</tbody></table></div></section>
 
 <script>
 (function(){
@@ -102,6 +104,10 @@
     const plan = document.getElementById('dues-plan');
     const start = document.getElementById('dues-start');
     const total = document.getElementById('dues-total');
+    const coronacionEnabled = document.getElementById('dues-coronacion-enabled');
+    const coronacion = document.getElementById('dues-coronacion');
+    const posadaEnabled = document.getElementById('dues-posada-enabled');
+    const posada = document.getElementById('dues-posada');
     const monthly = Number(duesForm.dataset.monthly || 0);
     const now = new Date();
     const yyyy = now.getFullYear();
@@ -109,9 +115,20 @@
     if (!start.value) start.value = yyyy + '-' + mm;
     function refreshDues(){
       const months = plan.value === 'Anual' ? 12 : (plan.value === 'Trimestral' ? 3 : 1);
-      total.value = (monthly * months).toLocaleString('es-MX', {style:'currency', currency:'MXN'});
+      const coronacionAmount = coronacionEnabled.checked ? Number(coronacion.value || 0) : 0;
+      const posadaAmount = posadaEnabled.checked ? Number(posada.value || 0) : 0;
+      total.value = (monthly * months + coronacionAmount + posadaAmount).toLocaleString('es-MX', {style:'currency', currency:'MXN'});
+    }
+    function toggleOptional(check, input){
+      input.disabled = !check.checked;
+      if (!check.checked) input.value = '0.00';
+      refreshDues();
     }
     plan.addEventListener('change', refreshDues);
+    coronacionEnabled.addEventListener('change', () => toggleOptional(coronacionEnabled, coronacion));
+    posadaEnabled.addEventListener('change', () => toggleOptional(posadaEnabled, posada));
+    coronacion.addEventListener('input', refreshDues);
+    posada.addEventListener('input', refreshDues);
     refreshDues();
   }
 })();
