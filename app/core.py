@@ -563,7 +563,7 @@ def new_member_form(request: Request, db: Session = Depends(get_db)):
 @app.post("/admin/socios/nuevo")
 async def create_member(
     request: Request,
-    member_number: str = Form(""), first_name: str = Form(...), last_name: str = Form(...), email: str = Form(...), phone: str = Form(""),
+    member_number: str = Form(""), first_name: str = Form(...), last_name: str = Form(...), email: str = Form(...), phone: str = Form(""), birth_date: str = Form(""),
     address: str = Form(""), emergency_contact: str = Form(""), notes: str = Form(""),
     member_type: str = Form("Regular"),
     membership_type: str = Form("Permanente"), start_date: str = Form(""), end_date: str = Form(""),
@@ -583,7 +583,7 @@ async def create_member(
     number = member_number.strip() or f"SOC-{next_id:05d}"
     if db.query(Member).filter(func.lower(Member.member_number)==number.lower()).first():
         return templates.TemplateResponse("member_form.html", {"request": request, "error": "Ese número interno de socio ya está registrado."}, status_code=400)
-    m = Member(member_number=number, first_name=first_name.strip(), last_name=last_name.strip(), email=email.strip().lower(), phone=phone.strip(), address=address.strip(), emergency_contact=emergency_contact.strip(), notes=notes.strip(), qr_token=secrets.token_urlsafe(24))
+    m = Member(member_number=number, first_name=first_name.strip(), last_name=last_name.strip(), email=email.strip().lower(), phone=phone.strip(), birth_date=parse_optional_date(birth_date), address=address.strip(), emergency_contact=emergency_contact.strip(), notes=notes.strip(), qr_token=secrets.token_urlsafe(24))
     db.add(m); db.flush()
     set_member_billing_type(db, m.id, member_type)
     db.flush()
@@ -629,7 +629,7 @@ def member_detail(member_id: int, request: Request, db: Session = Depends(get_db
 
 @app.post("/admin/socios/{member_id}/datos")
 async def update_member_data(member_id: int, request: Request,
-    member_number: str = Form(...), first_name: str = Form(...), last_name: str = Form(...), email: str = Form(...), phone: str = Form(""),
+    member_number: str = Form(...), first_name: str = Form(...), last_name: str = Form(...), email: str = Form(...), phone: str = Form(""), birth_date: str = Form(""),
     address: str = Form(""), emergency_contact: str = Form(""), notes: str = Form(""), member_type: str = Form("Regular"), member_photo: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db)):
     require_admin(request, db)
@@ -642,7 +642,7 @@ async def update_member_data(member_id: int, request: Request,
     email_owner = db.query(Member).filter(func.lower(Member.email)==email.strip().lower(), Member.id != member_id).first()
     if email_owner:
         raise HTTPException(400, "Ese correo ya está en uso.")
-    m.member_number = number; m.first_name = first_name.strip(); m.last_name = last_name.strip(); m.email = email.strip().lower(); m.phone = phone.strip(); m.address = address.strip(); m.emergency_contact = emergency_contact.strip(); m.notes = notes.strip()
+    m.member_number = number; m.first_name = first_name.strip(); m.last_name = last_name.strip(); m.email = email.strip().lower(); m.phone = phone.strip(); m.birth_date = parse_optional_date(birth_date); m.address = address.strip(); m.emergency_contact = emergency_contact.strip(); m.notes = notes.strip()
     if m.user: m.user.email = m.email
     set_member_billing_type(db, m.id, member_type)
     photo_data = await image_to_data_url(member_photo)

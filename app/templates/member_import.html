@@ -1,0 +1,28 @@
+{% extends "base.html" %}{% block title %}Importar socios · Club de Leones de Sabinas{% endblock %}{% block content %}
+<div class="page-head"><div><span class="eyebrow">ADMINISTRACIÓN · SOCIOS</span><h1>Importar socios desde Excel</h1></div><a href="/admin">← Panel</a></div>
+{% if error %}<div class="alert">{{error}}</div>{% endif %}
+{% if result %}
+<div class="alert success"><b>Importación terminada.</b> Se detectaron {{result.detectados}} socios activos y se dieron de alta {{result.importados}}. Se omitieron {{result.omitidos}} porque ya existían.</div>
+<div class="stats">
+  <div class="stat"><span>Socios importados</span><b>{{result.importados}}</b></div>
+  <div class="stat"><span>Ya existentes</span><b>{{result.omitidos}}</b></div>
+  <div class="stat"><span>Sin correo real</span><b>{{result.correos_tecnicos}}</b><small>Se asignó un correo técnico para permitir guardar el registro.</small></div>
+  <div class="stat"><span>Sin teléfono</span><b>{{result.sin_telefono}}</b></div>
+  <div class="stat"><span>Cónyuges registrados</span><b>{{result.conyuges}}</b></div>
+</div>
+{% endif %}
+<section class="card">
+  <div class="section-title"><div><span class="eyebrow">REPORTE DE LIONS</span><h2>Alta masiva de socios</h2></div><span class="badge muted">{{current_members}} socio(s) actuales</span></div>
+  <p>Sube el archivo <b>Member Detail Information</b> en formato XLSX. El sistema detecta automáticamente los encabezados y sólo importa socios activos.</p>
+  <form class="compact-form" method="post" enctype="multipart/form-data">
+    <label class="wide">Archivo XLSX<input type="file" name="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required></label>
+    <div class="wide alert">
+      <b>Datos que se aprovecharán:</b> número de socio, nombre, segundo nombre, apellidos, correo, teléfono, dirección, fecha de nacimiento, fecha de ingreso y cónyuge. Los duplicados por número de socio se omiten.
+    </div>
+    <div class="wide alert success">
+      <b>Accesos:</b> esta importación no crea contraseñas ni cuentas de portal. Primero se registra correctamente el padrón de socios; los accesos se pueden habilitar después.
+    </div>
+    <button type="submit">Importar socios</button>
+  </form>
+</section>
+{% endblock %}
