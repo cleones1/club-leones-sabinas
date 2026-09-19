@@ -1,11 +1,17 @@
 from fastapi import APIRouter, Request, Depends, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func
+from sqlalchemy import and_, or_, func, inspect, text
 from pathlib import Path
+from datetime import date, datetime
+import base64
+import hashlib
+import io
+import json
+import zipfile
 
-from .database import get_db
+from .database import get_db, engine
 from .models import (
     Member, MemberPhoto, FamilyMember, Membership, Payment, PoolPass,
     ClubSetting, MemberBillingProfile, MonthlyCharge, ManualDebt,
@@ -66,6 +72,119 @@ def orphan_counts(db: Session):
         "Asignaciones sin pago": db.query(DebtPaymentAllocation).filter(~DebtPaymentAllocation.payment_id.in_(payment_ids)).count(),
         "Asignaciones sin destino": allocations_bad_target,
     }
+
+
+def _backup_value(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return {"__type__": "base64", "value": base64.b64encode(bytes(value)).decode("ascii")}
+    return str(value)
+
+
+def build_database_backup(db: Session):
+    """Genera un respaldo lógico completo en memoria sin escribirlo al servidor."""
+    inspector = inspect(engine)
+    schema = None
+    table_names = sorted(inspector.get_table_names(schema=schema))
+    generated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+    output = io.BytesIO()
+    manifest = {
+        "format": "club-leones-logical-backup-v1",
+        "generated_at_utc": generated_at,
+        "database_dialect": engine.dialect.name,
+        "tables": [],
+        "total_rows": 0,
+        "notes": [
+            "Respaldo lógico completo generado desde el panel administrativo.",
+            "Los campos de contraseña se conservan únicamente como hashes existentes; no contiene contraseñas en texto plano.",
+            "Los archivos JSON están codificados en UTF-8.",
+        ],
+    }
+
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        for table_name in table_names:
+            quoted = engine.dialect.identifier_preparer.quote(table_name)
+            rows = db.execute(text(f"SELECT * FROM {quoted}")).mappings().all()
+            serializable_rows = [
+                {str(key): _backup_value(value) for key, value in row.items()}
+                for row in rows
+            ]
+
+            columns = []
+            for col in inspector.get_columns(table_name, schema=schema):
+                columns.append({
+                    "name": col.get("name"),
+                    "type": str(col.get("type")),
+                    "nullable": bool(col.get("nullable", True)),
+                    "default": str(col.get("default")) if col.get("default") is not None else None,
+                })
+
+            metadata = {
+                "table": table_name,
+                "columns": columns,
+                "primary_key": inspector.get_pk_constraint(table_name, schema=schema),
+                "foreign_keys": inspector.get_foreign_keys(table_name, schema=schema),
+                "row_count": len(serializable_rows),
+                "rows": serializable_rows,
+            }
+            raw = json.dumps(metadata, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+            filename = f"tables/{table_name}.json"
+            archive.writestr(filename, raw)
+
+            manifest["tables"].append({
+                "name": table_name,
+                "rows": len(serializable_rows),
+                "file": filename,
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            })
+            manifest["total_rows"] += len(serializable_rows)
+
+        manifest_raw = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
+        archive.writestr("manifest.json", manifest_raw)
+        archive.writestr(
+            "LEEME.txt",
+            (
+                "RESPALDO DE BASE DE DATOS · CLUB DE LEONES DE SABINAS\n"
+                "======================================================\n\n"
+                f"Generado: {generated_at}\n"
+                f"Tablas: {len(table_names)}\n"
+                f"Registros totales: {manifest['total_rows']}\n\n"
+                "Este ZIP contiene un respaldo lógico de todas las tablas presentes al momento de generarlo.\n"
+                "Cada tabla se encuentra en la carpeta tables/ en formato JSON.\n"
+                "manifest.json incluye conteos, estructura básica y SHA-256 para verificar integridad.\n\n"
+                "IMPORTANTE:\n"
+                "- Guarde este archivo en un lugar seguro porque contiene información personal y financiera.\n"
+                "- No publique ni envíe este respaldo por medios no seguros.\n"
+                "- Para restaurarlo, utilice una herramienta de restauración compatible con este formato o solicite la restauración desde el sistema.\n"
+            ).encode("utf-8"),
+        )
+
+    output.seek(0)
+    return output, manifest
+
+
+@router.get("/admin/configuracion/base-datos/respaldo")
+def download_database_backup(request: Request, db: Session = Depends(get_db)):
+    require_admin(request, db)
+    backup, manifest = build_database_backup(db)
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"Respaldo_BD_Club_de_Leones_{stamp}.zip"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Cache-Control": "no-store, max-age=0",
+        "X-Content-Type-Options": "nosniff",
+        "X-Backup-Tables": str(len(manifest["tables"])),
+        "X-Backup-Rows": str(manifest["total_rows"]),
+    }
+    return StreamingResponse(
+        backup,
+        media_type="application/zip",
+        headers=headers,
+    )
 
 
 def render_settings(request: Request, db: Session, current: User, error: str = ""):

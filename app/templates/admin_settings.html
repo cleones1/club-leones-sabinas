@@ -40,6 +40,14 @@
 </section>
 
 <section class="card">
+<div class="section-title"><div><span class="eyebrow">RESPALDO</span><h2>Respaldar base de datos</h2></div><span class="badge success">Descarga segura</span></div>
+<p>Genera un respaldo lógico completo de la base de datos actual. Incluye socios, familiares, membresías, cuotas, pagos, adeudos, usuarios, precios, configuraciones, rentas al público, depósitos y cualquier otra tabla existente en el sistema.</p>
+<div class="alert success"><b>El respaldo se genera al momento.</b> Se descarga directamente a tu dispositivo y no queda publicado ni almacenado como archivo dentro de GitHub.</div>
+<div class="actions"><a class="btn" href="/admin/configuracion/base-datos/respaldo">Descargar respaldo de BD</a></div>
+<small><b>Seguridad:</b> el ZIP contiene información personal y financiera. Guárdalo en un lugar seguro. Las contraseñas no aparecen en texto plano; únicamente se conservan los hashes internos necesarios para una restauración.</small>
+</section>
+
+<section class="card">
 <div class="section-title"><div><span class="eyebrow">MANTENIMIENTO</span><h2>Limpieza segura de la base de datos</h2></div><span class="badge {{'warning' if orphan_total > 0 else 'success'}}">{{orphan_total}} por revisar</span></div>
 <p>Esta limpieza únicamente elimina <b>registros técnicos huérfanos</b>: datos que apuntan a socios, pagos o adeudos que ya no existen. <b>No elimina socios vigentes, pagos válidos, mensualidades ni adeudos asociados a un socio existente.</b></p>
 <div class="table-wrap"><table><thead><tr><th>Revisión</th><th>Detectados</th></tr></thead><tbody>
