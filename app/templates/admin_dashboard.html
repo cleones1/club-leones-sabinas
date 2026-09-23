@@ -5,18 +5,18 @@
   {% if debt_map[m.id] > 0 %}{% set fin.debtors = fin.debtors + 1 %}{% endif %}
 {% endfor %}
 {% set expected_monthly = (fin.regular * monthly_fee) + (fin.pensionado * monthly_fee_pensionado) %}
-<div class="page-head"><div><span class="eyebrow">CLUB DE LEONES DE SABINAS · ADMINISTRACIÓN</span><h1>Panel del club</h1></div><div class="actions"><a class="btn secondary" href="/admin/rentas-publico">Renta salones al público</a><a class="btn secondary" href="/admin/precios">Precios de venta y renta</a><a class="btn secondary" href="/admin/importar-socios">Importar socios</a><a class="btn secondary" href="/admin/configuracion">Administradores y BD</a><a class="btn secondary" href="#estado-financiero-general">Estado financiero general</a><a class="btn secondary" href="/admin/finanzas">Estado financiero</a><a class="btn" href="/admin/socios/nuevo">+ Nuevo socio</a></div></div>
+<div class="page-head"><div><span class="eyebrow">CLUB DE LEONES DE SABINAS · ADMINISTRACIÓN</span><h1>Panel del club</h1></div><div class="actions"><a class="btn secondary" href="/admin/corte-dia">Corte del día</a><a class="btn secondary" href="/admin/rentas-publico">Renta salones al público</a><a class="btn secondary" href="/admin/precios">Precios de venta y renta</a><a class="btn secondary" href="/admin/importar-socios">Importar socios</a><a class="btn secondary" href="/admin/configuracion">Administradores y BD</a><a class="btn secondary" href="#estado-financiero-general">Estado financiero general</a><a class="btn secondary" href="/admin/finanzas">Estado financiero</a><a class="btn" href="/admin/socios/nuevo">+ Nuevo socio</a></div></div>
 
 <section class="card" id="estado-financiero-general">
 <div class="section-title"><div><span class="eyebrow">RESUMEN GENERAL</span><h2>Estado financiero general</h2></div><a class="mini-btn" href="/admin/finanzas">Ver detalle financiero →</a></div>
 <p>Vista consolidada de los movimientos registrados y de la cartera pendiente del Club.</p>
 <div class="stats">
-  <div class="stat"><span>Ingresos registrados del mes</span><b>${{"{:,.2f}".format(income)}}</b><small>Pagos de socios capturados en el mes actual.</small></div>
+  <div class="stat"><span>Ingresos registrados del mes</span><b>${{"{:,.2f}".format(income)}}</b><small>Ingresos registrados en el mes actual, incluyendo rentas al público.</small></div>
   <div class="stat debt-stat"><span>Cartera pendiente total</span><b>${{"{:,.2f}".format(total_debt)}}</b><small>Cuotas, recargos y otros adeudos aún pendientes.</small></div>
   <div class="stat"><span>Base mensual esperada</span><b>${{"{:,.2f}".format(expected_monthly)}}</b><small>{{fin.regular}} regulares · {{fin.pensionado}} pensionados.</small></div>
   <div class="stat"><span>Socios con saldo</span><b>{{fin.debtors}}</b><small>de {{total}} socio(s) registrados.</small></div>
 </div>
-<small><b>Nota:</b> este resumen muestra ingresos de socios y cuentas por cobrar. Las rentas al público tienen su control independiente, incluido el depósito en garantía.</small>
+<small><b>Nota:</b> los ingresos incluyen pagos de socios y rentas al público. Los depósitos en garantía se mantienen fuera del ingreso mientras estén en resguardo.</small>
 </section>
 
 <div class="stats"><div class="stat"><span>Socios</span><b>{{total}}</b></div><div class="stat"><span>Activos</span><b>{{active}}</b></div><div class="stat"><span>Suspendidos</span><b>{{suspended}}</b></div><div class="stat"><span>Membresía</span><b>Permanente</b></div><div class="stat"><span>Ingresos del mes</span><b>${{"{:,.2f}".format(income)}}</b></div><div class="stat debt-stat"><span>Adeudo total</span><b>${{"{:,.2f}".format(total_debt)}}</b><small>Regular: ${{"{:,.2f}".format(monthly_fee)}} · Pensionado: ${{"{:,.2f}".format(monthly_fee_pensionado)}}</small></div></div>

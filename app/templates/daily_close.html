@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}Corte del día · Club de Leones de Sabinas{% endblock %}
+{% block content %}
+<style>
+@media print {
+  .no-print, header, nav, footer { display:none !important; }
+  body { background:#fff !important; }
+  .card { box-shadow:none !important; break-inside:avoid; }
+  .page-head { margin-bottom:12px; }
+  table { font-size:11px; }
+}
+</style>
+
+<div class="page-head">
+  <div>
+    <span class="eyebrow">ADMINISTRACIÓN · CAJA</span>
+    <h1>Corte del día</h1>
+    <p>Cobros registrados el {{selected_label}}</p>
+  </div>
+  <div class="actions no-print">
+    <button class="btn secondary" type="button" onclick="window.print()">Imprimir corte</button>
+    <a class="btn secondary" href="/admin">← Panel</a>
+  </div>
+</div>
+
+<section class="card no-print">
+  <form class="compact-form" method="get" action="/admin/corte-dia">
+    <label>Fecha del corte<input type="date" name="fecha" value="{{selected_iso}}" required></label>
+    <button type="submit">Generar corte</button>
+  </form>
+</section>
+
+<div class="stats">
+  <div class="stat"><span>Cuotas cobradas</span><b>${{"{:,.2f}".format(dues_total)}}</b><small>Aplicado a mensualidades de socios.</small></div>
+  <div class="stat"><span>Otros ingresos</span><b>${{"{:,.2f}".format(other_total)}}</b><small>Coronación, Posada, rentas, ventas y otros.</small></div>
+  <div class="stat"><span>Total de ingresos</span><b>${{"{:,.2f}".format(total_income)}}</b><small>{{payment_count}} movimiento(s) de cobro.</small></div>
+  <div class="stat"><span>Garantías recibidas</span><b>${{"{:,.2f}".format(guarantee_total)}}</b><small>No se incluyen como ingreso del día.</small></div>
+</div>
+
+<section class="card">
+  <div class="section-title">
+    <div><span class="eyebrow">CUOTAS</span><h2>Socios que pagaron</h2></div>
+    <strong>${{"{:,.2f}".format(dues_total)}}</strong>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Hora</th><th>Socio</th><th>Mensualidad / periodo pagado</th><th>Folio</th><th>Método</th><th>Aplicado a cuota</th></tr></thead>
+      <tbody>
+      {% for row in dues_rows %}
+        <tr>
+          <td>{{row.time}}</td>
+          <td><strong>{{row.member}}</strong><small>{{row.member_number}}</small></td>
+          <td>{{row.periods}}</td>
+          <td>{{row.folio}}</td>
+          <td>{{row.method}}</td>
+          <td><strong>${{"{:,.2f}".format(row.amount)}}</strong></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6">No hay pagos de mensualidades registrados en esta fecha.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
+  <div class="section-title">
+    <div><span class="eyebrow">OTROS INGRESOS</span><h2>Ingresos adicionales del día</h2></div>
+    <strong>${{"{:,.2f}".format(other_total)}}</strong>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Hora</th><th>Rubro</th><th>Socio / cliente</th><th>Concepto</th><th>Folio / referencia</th><th>Método</th><th>Importe</th></tr></thead>
+      <tbody>
+      {% for row in other_rows %}
+        <tr>
+          <td>{{row.time}}</td>
+          <td><span class="badge muted">{{row.category}}</span></td>
+          <td><strong>{{row.person}}</strong><small>{{row.member_number}}</small></td>
+          <td>{{row.concept}}</td>
+          <td>{{row.folio}}</td>
+          <td>{{row.method}}</td>
+          <td><strong>${{"{:,.2f}".format(row.amount)}}</strong></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7">No hay otros ingresos registrados en esta fecha.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="detail-grid">
+<section class="card">
+  <div class="section-title"><h2>Totales por método de pago</h2><strong>${{"{:,.2f}".format(total_income)}}</strong></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Método</th><th>Total</th></tr></thead>
+      <tbody>
+      {% for method, amount in method_totals %}
+        <tr><td>{{method}}</td><td><strong>${{"{:,.2f}".format(amount)}}</strong></td></tr>
+      {% else %}
+        <tr><td colspan="2">Sin cobros registrados.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
+  <div class="section-title"><h2>Depósitos en garantía recibidos</h2><strong>${{"{:,.2f}".format(guarantee_total)}}</strong></div>
+  <p>Se muestran para control de caja, pero <b>no se suman a los ingresos del corte</b>.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Hora</th><th>Cliente</th><th>Concepto</th><th>Método</th><th>Importe</th></tr></thead>
+      <tbody>
+      {% for row in guarantee_rows %}
+        <tr><td>{{row.time}}</td><td>{{row.person}}</td><td>{{row.concept}}</td><td>{{row.method}}</td><td><strong>${{"{:,.2f}".format(row.amount)}}</strong></td></tr>
+      {% else %}
+        <tr><td colspan="5">Sin depósitos en garantía recibidos.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+</div>
+
+<section class="card">
+  <div class="section-title"><div><span class="eyebrow">CIERRE</span><h2>Resumen del corte</h2></div><span class="badge success">{{selected_label}}</span></div>
+  <div class="stats">
+    <div class="stat"><span>Cuotas</span><b>${{"{:,.2f}".format(dues_total)}}</b></div>
+    <div class="stat"><span>Otros ingresos</span><b>${{"{:,.2f}".format(other_total)}}</b></div>
+    <div class="stat"><span>TOTAL INGRESOS</span><b>${{"{:,.2f}".format(total_income)}}</b></div>
+    <div class="stat"><span>Garantías fuera de ingreso</span><b>${{"{:,.2f}".format(guarantee_total)}}</b></div>
+  </div>
+  <small>Corte generado con los movimientos registrados en el sistema para la fecha seleccionada.</small>
+</section>
+{% endblock %}
