@@ -29,15 +29,16 @@
 <form id="dues-form" class="compact-form" action="/admin/socios/{{m.id}}/cuota/pagar" method="post" data-monthly="{{member_monthly_fee}}">
 <label>Periodicidad<select id="dues-plan" name="plan" required><option value="Mensual">Mensual</option><option value="Trimestral">Trimestral · 3 meses</option><option value="Anual">Anual · 12 meses</option></select></label>
 <label>Mes inicial<input id="dues-start" name="start_period" type="month" required></label>
-<label>Cuota mensual<input value="${{"{:,.2f}".format(member_monthly_fee)}}" readonly></label>
+<label>Cuota mensual normal<input value="${{"{:,.2f}".format(member_monthly_fee)}}" readonly></label>
 <label>Total estimado<input id="dues-total" readonly></label>
+<label><span><input id="dues-special-enabled" type="checkbox"> Extra · modificar cuota mensual</span><input id="dues-special" name="special_monthly_fee" type="number" min="0.01" step="0.01" value="{{'%.2f'|format(member_monthly_fee)}}" disabled placeholder="Nueva cuota mensual"><small>Sólo modifica este pago y los meses que cubre.</small></label>
 <label><span><input id="dues-coronacion-enabled" type="checkbox"> Agregar Coronación</span><input id="dues-coronacion" name="coronacion_amount" type="number" min="0" step="0.01" value="0.00" disabled placeholder="Importe"></label>
 <label><span><input id="dues-posada-enabled" type="checkbox"> Agregar Posada</span><input id="dues-posada" name="posada_amount" type="number" min="0" step="0.01" value="0.00" disabled placeholder="Importe"></label>
 <label>Método<select name="method" required><option>Efectivo</option><option>Transferencia</option><option>Tarjeta</option><option>Otro</option></select></label>
 <label class="wide">Referencia / nota<input name="reference" placeholder="Opcional"></label>
 <button type="submit">Registrar pago de cuota</button>
 </form>
-<small>Mensual cubre 1 cuota, Trimestral 3 y Anual 12. Coronación y Posada son cargos opcionales: actívalos sólo cuando correspondan y captura el importe. Ambos aparecerán separados en el recibo. Si el periodo elegido tiene recargo, el total final puede ser mayor al estimado.</small>
+<small>Mensual cubre 1 cuota, Trimestral 3 y Anual 12. <b>Extra · modificar cuota mensual</b> permite usar un importe especial únicamente para este pago, sin cambiar la tarifa general del socio. Coronación y Posada siguen siendo cargos opcionales y aparecerán separados en el recibo. Si el periodo elegido tiene recargo, el total final puede ser mayor al estimado.</small>
 </section>
 
 <section class="card" id="renta-instalaciones">
@@ -104,6 +105,8 @@
     const plan = document.getElementById('dues-plan');
     const start = document.getElementById('dues-start');
     const total = document.getElementById('dues-total');
+    const specialEnabled = document.getElementById('dues-special-enabled');
+    const special = document.getElementById('dues-special');
     const coronacionEnabled = document.getElementById('dues-coronacion-enabled');
     const coronacion = document.getElementById('dues-coronacion');
     const posadaEnabled = document.getElementById('dues-posada-enabled');
@@ -115,9 +118,10 @@
     if (!start.value) start.value = yyyy + '-' + mm;
     function refreshDues(){
       const months = plan.value === 'Anual' ? 12 : (plan.value === 'Trimestral' ? 3 : 1);
+      const effectiveMonthly = specialEnabled.checked ? Math.max(0, Number(special.value || 0)) : monthly;
       const coronacionAmount = coronacionEnabled.checked ? Number(coronacion.value || 0) : 0;
       const posadaAmount = posadaEnabled.checked ? Number(posada.value || 0) : 0;
-      total.value = (monthly * months + coronacionAmount + posadaAmount).toLocaleString('es-MX', {style:'currency', currency:'MXN'});
+      total.value = (effectiveMonthly * months + coronacionAmount + posadaAmount).toLocaleString('es-MX', {style:'currency', currency:'MXN'});
     }
     function toggleOptional(check, input){
       input.disabled = !check.checked;
@@ -125,6 +129,12 @@
       refreshDues();
     }
     plan.addEventListener('change', refreshDues);
+    specialEnabled.addEventListener('change', () => {
+      special.disabled = !specialEnabled.checked;
+      if (!specialEnabled.checked) special.value = monthly.toFixed(2);
+      refreshDues();
+    });
+    special.addEventListener('input', refreshDues);
     coronacionEnabled.addEventListener('change', () => toggleOptional(coronacionEnabled, coronacion));
     posadaEnabled.addEventListener('change', () => toggleOptional(posadaEnabled, posada));
     coronacion.addEventListener('input', refreshDues);

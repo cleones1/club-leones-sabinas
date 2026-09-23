@@ -109,6 +109,19 @@ def _plan_from_payment(payment: Payment):
     return "Mensual", 1
 
 
+def _special_monthly_fee_from_payment(payment: Payment):
+    for piece in (payment.concept or "").split("·"):
+        item = piece.strip()
+        prefix = "Cuota especial $"
+        if item.startswith(prefix):
+            try:
+                amount = round(float(item[len(prefix):].strip()), 2)
+            except (TypeError, ValueError):
+                return None
+            return amount if amount > 0 else None
+    return None
+
+
 def _optional_charges_from_payment(payment: Payment):
     charges = []
     for piece in (payment.concept or "").split("·"):
@@ -193,8 +206,15 @@ def dues_receipt(payment_id: int, request: Request, db: Session = Depends(get_db
     member = payment.member
     kind = member_billing_type(db, member.id)
     is_retired = kind == "Pensionado"
-    breakdown = JUBILADO_BREAKDOWN if is_retired else REGULAR_BREAKDOWN
-    monthly_total = JUBILADO_TOTAL if is_retired else REGULAR_TOTAL
+    standard_breakdown = JUBILADO_BREAKDOWN if is_retired else REGULAR_BREAKDOWN
+    standard_monthly_total = JUBILADO_TOTAL if is_retired else REGULAR_TOTAL
+    special_monthly_fee = _special_monthly_fee_from_payment(payment)
+    if special_monthly_fee is not None:
+        breakdown = [("Cuota mensual especial", special_monthly_fee)]
+        monthly_total = special_monthly_fee
+    else:
+        breakdown = standard_breakdown
+        monthly_total = standard_monthly_total
     member_label = "Socio jubilado" if is_retired else "Socio normal"
     plan_name, inferred_months = _plan_from_payment(payment)
 
@@ -256,6 +276,8 @@ def dues_receipt(payment_id: int, request: Request, db: Session = Depends(get_db
     ]
     if period_lines:
         details.append(("Periodo cubierto", period_lines[0]))
+    if special_monthly_fee is not None:
+        details.append(("Cuota especial", "$" + f"{special_monthly_fee:,.2f} por mes"))
     if payment.reference:
         details.append(("Referencia", payment.reference))
 
@@ -272,7 +294,7 @@ def dues_receipt(payment_id: int, request: Request, db: Session = Depends(get_db
     c.line(margin, y, w - margin, y)
     y -= 12
     c.setFont("Helvetica-Bold", 8)
-    c.drawString(margin, y, "DESGLOSE DE CUOTA MENSUAL")
+    c.drawString(margin, y, "CUOTA MENSUAL ESPECIAL" if special_monthly_fee is not None else "DESGLOSE DE CUOTA MENSUAL")
     y -= 12
 
     c.setFont("Helvetica", 7.7)

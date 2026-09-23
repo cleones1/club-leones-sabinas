@@ -8,7 +8,7 @@ from sqlalchemy import func
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Optional
-import io, os, secrets, base64, calendar
+import io, os, secrets, base64, calendar, math
 import qrcode
 from PIL import Image, ImageOps
 from reportlab.pdfgen import canvas
@@ -692,7 +692,7 @@ def add_membership(member_id: int, request: Request, membership_type: str = Form
 
 
 @app.post("/admin/socios/{member_id}/cuota/pagar")
-def pay_member_dues(member_id: int, request: Request, plan: str = Form(...), start_period: str = Form(""), method: str = Form(...), reference: str = Form(""), coronacion_amount: float = Form(0), posada_amount: float = Form(0), db: Session = Depends(get_db)):
+def pay_member_dues(member_id: int, request: Request, plan: str = Form(...), start_period: str = Form(""), method: str = Form(...), reference: str = Form(""), special_monthly_fee: float = Form(0), coronacion_amount: float = Form(0), posada_amount: float = Form(0), db: Session = Depends(get_db)):
     require_admin(request, db)
     sync_finances(db)
     m = db.get(Member, member_id)
@@ -704,6 +704,12 @@ def pay_member_dues(member_id: int, request: Request, plan: str = Form(...), sta
     fee = member_monthly_fee(db, m.id)
     if fee <= 0:
         raise HTTPException(400, "Primero configura la cuota mensual para este tipo de socio.")
+    if not math.isfinite(special_monthly_fee or 0):
+        raise HTTPException(400, "El importe de cuota especial no es válido.")
+    special_fee = round(float(special_monthly_fee or 0), 2)
+    if special_fee < 0:
+        raise HTTPException(400, "La cuota especial no puede ser negativa.")
+    special_fee = special_fee if special_fee > 0 else None
     cursor = month_start_from_period(start_period)
     today = date.today()
     current_month = date(today.year, today.month, 1)
@@ -713,11 +719,33 @@ def pay_member_dues(member_id: int, request: Request, plan: str = Form(...), sta
         period = f"{cursor.year:04d}-{cursor.month:02d}"
         charge = db.query(MonthlyCharge).filter(MonthlyCharge.member_id == m.id, MonthlyCharge.period == period).first()
         if not charge:
-            charge = MonthlyCharge(member_id=m.id, period=period, base_amount=fee, late_fee=0, paid_amount=0, due_date=monthly_due_date(cursor.year, cursor.month))
+            charge = MonthlyCharge(
+                member_id=m.id,
+                period=period,
+                base_amount=special_fee if special_fee is not None else fee,
+                late_fee=0,
+                paid_amount=0,
+                due_date=monthly_due_date(cursor.year, cursor.month),
+            )
             db.add(charge); db.flush()
-        elif (charge.paid_amount or 0) == 0 and cursor >= current_month:
-            charge.base_amount = fee
-            charge.late_fee = 0
+        else:
+            # Los periodos ya liquidados se omiten y se continúa al siguiente pendiente.
+            if monthly_charge_balance(charge) <= 0:
+                cursor = shift_months(cursor, 1)
+                attempts += 1
+                continue
+            if special_fee is not None:
+                if round(charge.paid_amount or 0, 2) > 0:
+                    raise HTTPException(
+                        400,
+                        f"No se puede aplicar cuota especial a {period_label(period)} porque ya tiene un abono parcial."
+                    )
+                charge.base_amount = special_fee
+                charge.late_fee = 0
+            elif (charge.paid_amount or 0) == 0 and cursor >= current_month:
+                charge.base_amount = fee
+                charge.late_fee = 0
+
         base_pending = round((charge.base_amount or 0) - (charge.paid_amount or 0), 2)
         if today > charge.due_date and base_pending > 0 and (charge.late_fee or 0) == 0:
             charge.late_fee = round((charge.base_amount or 0) * 0.10, 2)
@@ -740,6 +768,8 @@ def pay_member_dues(member_id: int, request: Request, plan: str = Form(...), sta
     if extra:
         note += f" · {extra}"
     concept_parts = [f"Cuota de socio · {plan}"]
+    if special_fee is not None:
+        concept_parts.append("Cuota especial $" + f"{special_fee:.2f}")
     if coronacion_amount > 0:
         concept_parts.append(f"Coronación ${coronacion_amount:.2f}")
     if posada_amount > 0:
