@@ -7,12 +7,13 @@ on:
       - '.github/workflows/backup-export.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   export:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Download encrypted database backup
         shell: bash
         run: |
@@ -29,10 +30,13 @@ jobs:
           done
           test "$ok" -eq 1
           test -s club-leones-db-backup.enc
-      - name: Upload encrypted backup artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: encrypted-db-backup-2026-09-23
-          path: club-leones-db-backup.enc
-          retention-days: 1
-          if-no-files-found: error
+      - name: Commit encrypted payload temporarily
+        shell: bash
+        run: |
+          set -e
+          base64 -w 0 club-leones-db-backup.enc > .temporary-db-backup.enc.b64
+          git config user.name "backup-bot"
+          git config user.email "backup-bot@users.noreply.github.com"
+          git add .temporary-db-backup.enc.b64
+          git commit -m "Temporary encrypted database backup payload [skip ci]"
+          git push
