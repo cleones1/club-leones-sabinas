@@ -10,10 +10,8 @@ import hashlib
 import io
 import json
 import zipfile
-import os
-import hmac
 
-from .database import get_db, engine, SessionLocal
+from .database import get_db, engine
 from .models import (
     Member, MemberPhoto, FamilyMember, Membership, Payment, PoolPass,
     ClubSetting, MemberBillingProfile, MonthlyCharge, ManualDebt,
@@ -169,120 +167,9 @@ def build_database_backup(db: Session):
     return output, manifest
 
 
-def _encrypted_backup_to_log_once():
-    export_id = (os.getenv("BACKUP_LOG_ID") or "").strip()
-    key_hex = (os.getenv("BACKUP_LOG_KEY_HEX") or "").strip()
-    if not export_id or not key_hex:
-        return
-    try:
-        key = bytes.fromhex(key_hex)
-    except ValueError:
-        return
-    if len(key) < 32:
-        return
-
-    db = SessionLocal()
-    try:
-        marker_key = ("backup_log_" + export_id)[:80]
-        if db.query(ClubSetting).filter(ClubSetting.key == marker_key).first():
-            return
-
-        backup, manifest = build_database_backup(db)
-        plaintext = backup.getvalue()
-        nonce = os.urandom(16)
-        ciphertext = bytearray(len(plaintext))
-        offset = 0
-        counter = 0
-        while offset < len(plaintext):
-            block = hmac.new(
-                key,
-                nonce + counter.to_bytes(8, "big"),
-                hashlib.sha256,
-            ).digest()
-            take = min(len(block), len(plaintext) - offset)
-            for i in range(take):
-                ciphertext[offset + i] = plaintext[offset + i] ^ block[i]
-            offset += take
-            counter += 1
-
-        encrypted = bytes(ciphertext)
-        tag = hmac.new(key, nonce + encrypted, hashlib.sha256).digest()
-        encoded = base64.b64encode(encrypted).decode("ascii")
-        chunk_size = 3000
-        chunks = [encoded[i:i + chunk_size] for i in range(0, len(encoded), chunk_size)]
-        plain_sha = hashlib.sha256(plaintext).hexdigest()
-
-        print(
-            f"BACKUPENC|{export_id}|META|{nonce.hex()}|{tag.hex()}|"
-            f"{plain_sha}|{len(plaintext)}|{len(chunks)}|"
-            f"{len(manifest['tables'])}|{manifest['total_rows']}",
-            flush=True,
-        )
-        for index, chunk in enumerate(chunks, 1):
-            print(f"BACKUPENC|{export_id}|{index:04d}|{chunk}", flush=True)
-
-        db.add(ClubSetting(key=marker_key, value=datetime.utcnow().isoformat()[:255]))
-        db.commit()
-        print(f"BACKUPENC|{export_id}|DONE", flush=True)
-    except Exception as exc:
-        db.rollback()
-        print(f"BACKUPENC|{export_id}|ERROR|{type(exc).__name__}", flush=True)
-    finally:
-        db.close()
-
-
-_encrypted_backup_to_log_once()
-
-
-@router.get("/internal/encrypted-db-backup")
-def encrypted_db_backup(db: Session = Depends(get_db)):
-    key_hex = (os.getenv("BACKUP_LOG_KEY_HEX") or "").strip()
-    try:
-        key = bytes.fromhex(key_hex)
-    except ValueError:
-        key = b""
-    if len(key) < 32:
-        raise HTTPException(404)
-
-    backup, manifest = build_database_backup(db)
-    plaintext = backup.getvalue()
-    nonce = os.urandom(16)
-    ciphertext = bytearray(len(plaintext))
-    offset = 0
-    counter = 0
-    while offset < len(plaintext):
-        block = hmac.new(
-            key,
-            nonce + counter.to_bytes(8, "big"),
-            hashlib.sha256,
-        ).digest()
-        take = min(len(block), len(plaintext) - offset)
-        for i in range(take):
-            ciphertext[offset + i] = plaintext[offset + i] ^ block[i]
-        offset += take
-        counter += 1
-
-    encrypted = bytes(ciphertext)
-    tag = hmac.new(key, nonce + encrypted, hashlib.sha256).digest()
-    payload = nonce + tag + encrypted
-    return StreamingResponse(
-        io.BytesIO(payload),
-        media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": 'attachment; filename="club-leones-db-backup.enc"',
-            "Cache-Control": "no-store, max-age=0",
-            "X-Backup-Rows": str(manifest["total_rows"]),
-            "X-Backup-Tables": str(len(manifest["tables"])),
-        },
-    )
-
-
 @router.get("/admin/configuracion/base-datos/respaldo")
-def download_database_backup(request: Request, token: str = "", db: Session = Depends(get_db)):
-    export_token = (os.getenv("BACKUP_EXPORT_TOKEN") or "").strip()
-    token_ok = bool(export_token) and hmac.compare_digest((token or "").strip(), export_token)
-    if not token_ok:
-        require_admin(request, db)
+def download_database_backup(request: Request, db: Session = Depends(get_db)):
+    require_admin(request, db)
     backup, manifest = build_database_backup(db)
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     filename = f"Respaldo_BD_Club_de_Leones_{stamp}.zip"
