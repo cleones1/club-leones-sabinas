@@ -157,3 +157,16 @@ class User(Base):
     member_id = Column(Integer, ForeignKey("members.id"), nullable=True)
     active = Column(Boolean, default=True)
     member = relationship("Member", back_populates="user")
+
+
+class PaymentAudit(Base):
+    __tablename__ = "payment_audits"
+    id = Column(Integer, primary_key=True)
+    payment_kind = Column(String(20), nullable=False, index=True)
+    payment_id = Column(Integer, nullable=False, index=True)
+    action = Column(String(20), nullable=False, index=True)
+    reason = Column(Text, nullable=False)
+    before_data = Column(Text, default="")
+    after_data = Column(Text, default="")
+    admin_user_id = Column(Integer, nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)

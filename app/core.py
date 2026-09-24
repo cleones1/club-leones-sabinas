@@ -17,7 +17,7 @@ from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 
 from .database import Base, engine, get_db, SessionLocal
-from .models import Member, MemberPhoto, FamilyMember, Membership, Payment, PoolPass, ClubSetting, MemberBillingProfile, MonthlyCharge, ManualDebt, DebtPaymentAllocation, User
+from .models import Member, MemberPhoto, FamilyMember, Membership, Payment, PoolPass, ClubSetting, MemberBillingProfile, MonthlyCharge, ManualDebt, DebtPaymentAllocation, PaymentAudit, User
 from .public_models import PublicRental, PublicRentalPayment
 from .auth import hash_password, verify_password
 
@@ -269,7 +269,11 @@ def _income_category_from_concept(concept: str):
 
 def income_breakdown(db: Session, start_at: datetime | None = None, end_at: datetime | None = None):
     totals = {name: 0.0 for name in INCOME_CATEGORIES}
-    q = db.query(Payment)
+    cancelled_member_ids = db.query(PaymentAudit.payment_id).filter(
+        PaymentAudit.payment_kind == "member",
+        PaymentAudit.action == "cancelled",
+    )
+    q = db.query(Payment).filter(~Payment.id.in_(cancelled_member_ids))
     if start_at is not None:
         q = q.filter(Payment.paid_at >= start_at)
     if end_at is not None:
@@ -322,7 +326,14 @@ def income_breakdown(db: Session, start_at: datetime | None = None, end_at: date
         totals[_income_category_from_concept(payment.concept)] += amount
 
     # Rentas al público: sólo los pagos de renta son ingreso.
-    public_q = db.query(PublicRentalPayment).filter(PublicRentalPayment.payment_type == "renta")
+    cancelled_public_ids = db.query(PaymentAudit.payment_id).filter(
+        PaymentAudit.payment_kind == "public",
+        PaymentAudit.action == "cancelled",
+    )
+    public_q = db.query(PublicRentalPayment).filter(
+        PublicRentalPayment.payment_type == "renta",
+        ~PublicRentalPayment.id.in_(cancelled_public_ids),
+    )
     if start_at is not None:
         public_q = public_q.filter(PublicRentalPayment.paid_at >= start_at)
     if end_at is not None:
@@ -335,10 +346,18 @@ def income_breakdown(db: Session, start_at: datetime | None = None, end_at: date
 def guarantee_balances(db: Session):
     held = 0.0
     retained = 0.0
+    cancelled_public_ids = {
+        payment_id for (payment_id,) in db.query(PaymentAudit.payment_id).filter(
+            PaymentAudit.payment_kind == "public",
+            PaymentAudit.action == "cancelled",
+        ).all()
+    }
     rentals = db.query(PublicRental).all()
     for rental in rentals:
         received = round(sum(
-            float(p.amount or 0) for p in rental.payments if p.payment_type == "garantia"
+            float(p.amount or 0)
+            for p in rental.payments
+            if p.payment_type == "garantia" and p.id not in cancelled_public_ids
         ), 2)
         if rental.deposit_status == "En resguardo":
             held += received
@@ -624,6 +643,13 @@ def member_detail(member_id: int, request: Request, db: Session = Depends(get_db
         "debt_total": member_debt_total(db, m.id),
         "member_type": member_billing_type(db, m.id),
         "member_monthly_fee": member_monthly_fee(db, m.id),
+        "cancelled_payment_ids": {
+            payment_id for (payment_id,) in db.query(PaymentAudit.payment_id).filter(
+                PaymentAudit.payment_kind == "member",
+                PaymentAudit.action == "cancelled",
+                PaymentAudit.payment_id.in_([p.id for p in m.payments] or [-1]),
+            ).all()
+        },
     })
 
 
@@ -1009,6 +1035,12 @@ def payment_receipt(payment_id: int, request: Request, db: Session = Depends(get
     u = auth_user(request, db); p = db.get(Payment, payment_id)
     if not p: raise HTTPException(404)
     if not u or (u.role != "admin" and u.member_id != p.member_id): raise HTTPException(403)
+    if db.query(PaymentAudit).filter(
+        PaymentAudit.payment_kind == "member",
+        PaymentAudit.payment_id == p.id,
+        PaymentAudit.action == "cancelled",
+    ).first():
+        raise HTTPException(410, "Este pago fue anulado y ya no tiene un recibo válido.")
     m = p.member
     ticket_width = 80 * mm; margin = 5 * mm; max_chars = 39
     def wrap_ticket_text(value, limit=max_chars):

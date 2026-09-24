@@ -9,7 +9,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
 
 from .database import get_db, SessionLocal
-from .models import ClubSetting, MonthlyCharge, Payment, PoolPass
+from .models import ClubSetting, MonthlyCharge, Payment, PaymentAudit, PoolPass
 from .core import auth_user, member_billing_type, period_label
 
 router = APIRouter()
@@ -200,6 +200,12 @@ def dues_receipt(payment_id: int, request: Request, db: Session = Depends(get_db
         raise HTTPException(404)
     if not user or (user.role != "admin" and user.member_id != payment.member_id):
         raise HTTPException(403)
+    if db.query(PaymentAudit).filter(
+        PaymentAudit.payment_kind == "member",
+        PaymentAudit.payment_id == payment.id,
+        PaymentAudit.action == "cancelled",
+    ).first():
+        raise HTTPException(410, "Este pago fue anulado y ya no tiene un recibo válido.")
     if not (payment.concept or "").startswith("Cuota de socio"):
         raise HTTPException(400, "Este recibo especial sólo corresponde a cuotas de socio.")
 

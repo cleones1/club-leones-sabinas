@@ -7,7 +7,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from .database import get_db
-from .models import DebtPaymentAllocation, ManualDebt, Member, MonthlyCharge, Payment, User
+from .models import DebtPaymentAllocation, ManualDebt, Member, MonthlyCharge, Payment, PaymentAudit, User
 from .public_models import PublicRentalPayment
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -102,15 +102,32 @@ def _member_number(payment: Payment):
 def build_daily_close(db: Session, selected: date):
     start_utc, end_utc = local_bounds(selected)
 
+    cancelled_member_ids = db.query(PaymentAudit.payment_id).filter(
+        PaymentAudit.payment_kind == "member",
+        PaymentAudit.action == "cancelled",
+    )
+    cancelled_public_ids = db.query(PaymentAudit.payment_id).filter(
+        PaymentAudit.payment_kind == "public",
+        PaymentAudit.action == "cancelled",
+    )
+
     member_payments = (
         db.query(Payment)
-        .filter(Payment.paid_at >= start_utc, Payment.paid_at < end_utc)
+        .filter(
+            Payment.paid_at >= start_utc,
+            Payment.paid_at < end_utc,
+            ~Payment.id.in_(cancelled_member_ids),
+        )
         .order_by(Payment.paid_at.asc(), Payment.id.asc())
         .all()
     )
     public_payments = (
         db.query(PublicRentalPayment)
-        .filter(PublicRentalPayment.paid_at >= start_utc, PublicRentalPayment.paid_at < end_utc)
+        .filter(
+            PublicRentalPayment.paid_at >= start_utc,
+            PublicRentalPayment.paid_at < end_utc,
+            ~PublicRentalPayment.id.in_(cancelled_public_ids),
+        )
         .order_by(PublicRentalPayment.paid_at.asc(), PublicRentalPayment.id.asc())
         .all()
     )

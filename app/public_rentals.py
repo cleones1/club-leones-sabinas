@@ -8,7 +8,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .database import get_db
-from .models import ClubSetting, User
+from .models import ClubSetting, PaymentAudit, User
 from .public_models import PublicRental, PublicRentalPayment
 from .pricing_tools import PUBLIC_RENTAL_PRICES, ensure_price_settings
 
@@ -43,31 +43,42 @@ def hall_definition(key: str):
     return next((h for h in PUBLIC_HALLS if h["key"] == (key or "").strip().lower()), None)
 
 
-def rent_paid(rental: PublicRental):
-    return round(sum((p.amount or 0) for p in rental.payments if p.payment_type == "renta"), 2)
+def cancelled_public_ids(db: Session):
+    return {
+        payment_id for (payment_id,) in db.query(PaymentAudit.payment_id).filter(
+            PaymentAudit.payment_kind == "public",
+            PaymentAudit.action == "cancelled",
+        ).all()
+    }
 
 
-def deposit_paid(rental: PublicRental):
-    return round(sum((p.amount or 0) for p in rental.payments if p.payment_type == "garantia"), 2)
+def rent_paid(db: Session, rental: PublicRental):
+    cancelled = cancelled_public_ids(db)
+    return round(sum((p.amount or 0) for p in rental.payments if p.payment_type == "renta" and p.id not in cancelled), 2)
 
 
-def rent_balance(rental: PublicRental):
-    return max(0.0, round((rental.rental_price or 0) - rent_paid(rental), 2))
+def deposit_paid(db: Session, rental: PublicRental):
+    cancelled = cancelled_public_ids(db)
+    return round(sum((p.amount or 0) for p in rental.payments if p.payment_type == "garantia" and p.id not in cancelled), 2)
 
 
-def deposit_balance(rental: PublicRental):
-    return max(0.0, round((rental.deposit_required or 0) - deposit_paid(rental), 2))
+def rent_balance(db: Session, rental: PublicRental):
+    return max(0.0, round((rental.rental_price or 0) - rent_paid(db, rental), 2))
 
 
-def rental_rows(rentals):
+def deposit_balance(db: Session, rental: PublicRental):
+    return max(0.0, round((rental.deposit_required or 0) - deposit_paid(db, rental), 2))
+
+
+def rental_rows(db: Session, rentals):
     rows = []
     for rental in rentals:
         rows.append({
             "rental": rental,
-            "rent_paid": rent_paid(rental),
-            "rent_balance": rent_balance(rental),
-            "deposit_paid": deposit_paid(rental),
-            "deposit_balance": deposit_balance(rental),
+            "rent_paid": rent_paid(db, rental),
+            "rent_balance": rent_balance(db, rental),
+            "deposit_paid": deposit_paid(db, rental),
+            "deposit_balance": deposit_balance(db, rental),
         })
     return rows
 
@@ -79,14 +90,20 @@ def render_page(request: Request, db: Session, error: str = ""):
         halls.append({**hall,"price":setting_amount(db,hall["price_key"]),"deposit":setting_amount(db,hall["deposit_key"])})
     rentals = db.query(PublicRental).order_by(PublicRental.event_date.desc(), PublicRental.id.desc()).all()
     active = sum(1 for r in rentals if r.status == "Activa")
-    rental_income = db.query(func.coalesce(func.sum(PublicRentalPayment.amount), 0)).filter(PublicRentalPayment.payment_type == "renta").scalar() or 0
+    cancelled = cancelled_public_ids(db)
+    rental_income = round(sum(
+        float(p.amount or 0)
+        for p in db.query(PublicRentalPayment).filter(PublicRentalPayment.payment_type == "renta").all()
+        if p.id not in cancelled
+    ), 2)
     held_deposits = 0.0
     for r in rentals:
         if r.deposit_status == "En resguardo":
-            held_deposits += deposit_paid(r)
+            held_deposits += deposit_paid(db, r)
     return templates.TemplateResponse("public_rentals.html", {
-        "request":request,"halls":halls,"rows":rental_rows(rentals),"active_count":active,
+        "request":request,"halls":halls,"rows":rental_rows(db, rentals),"active_count":active,
         "rental_income":round(float(rental_income),2),"held_deposits":round(float(held_deposits),2),
+        "cancelled_public_ids":cancelled,
         "saved":request.query_params.get("creada")=="1","payment_saved":request.query_params.get("pago")=="1",
         "deposit_updated":request.query_params.get("deposito")=="1","cancelled":request.query_params.get("cancelada")=="1",
         "error":error,
@@ -164,7 +181,7 @@ def add_public_rental_payment(
     if kind not in ("renta", "garantia"): return render_page(request, db, "Tipo de pago inválido.")
     amount = round(float(amount or 0), 2)
     if amount <= 0: return render_page(request, db, "El importe debe ser mayor a cero.")
-    balance = rent_balance(rental) if kind == "renta" else deposit_balance(rental)
+    balance = rent_balance(db, rental) if kind == "renta" else deposit_balance(db, rental)
     if amount > balance + 0.001:
         return render_page(request, db, f'El pago excede el saldo pendiente de {"renta" if kind=="renta" else "depósito en garantía"}.')
     if kind == "garantia" and rental.deposit_status in ("Devuelto", "Retenido"):
@@ -183,7 +200,7 @@ def update_deposit_status(rental_id: int, request: Request, deposit_status: str 
     allowed = ("Pendiente", "En resguardo", "Devuelto", "Retenido")
     status = (deposit_status or "").strip()
     if status not in allowed: return render_page(request, db, "Estatus de depósito inválido.")
-    if status in ("Devuelto", "Retenido") and deposit_paid(rental) <= 0:
+    if status in ("Devuelto", "Retenido") and deposit_paid(db, rental) <= 0:
         return render_page(request, db, "No hay un depósito recibido para marcarlo como devuelto o retenido.")
     rental.deposit_status = status
     db.commit()
