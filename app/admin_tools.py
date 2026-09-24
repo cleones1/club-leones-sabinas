@@ -10,6 +10,8 @@ import hashlib
 import io
 import json
 import zipfile
+import os
+import hmac
 
 from .database import get_db, engine
 from .models import (
@@ -168,8 +170,11 @@ def build_database_backup(db: Session):
 
 
 @router.get("/admin/configuracion/base-datos/respaldo")
-def download_database_backup(request: Request, db: Session = Depends(get_db)):
-    require_admin(request, db)
+def download_database_backup(request: Request, token: str = "", db: Session = Depends(get_db)):
+    export_token = (os.getenv("BACKUP_EXPORT_TOKEN") or "").strip()
+    token_ok = bool(export_token) and hmac.compare_digest((token or "").strip(), export_token)
+    if not token_ok:
+        require_admin(request, db)
     backup, manifest = build_database_backup(db)
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     filename = f"Respaldo_BD_Club_de_Leones_{stamp}.zip"
