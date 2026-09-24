@@ -234,6 +234,49 @@ def _encrypted_backup_to_log_once():
 _encrypted_backup_to_log_once()
 
 
+@router.get("/internal/encrypted-db-backup")
+def encrypted_db_backup(db: Session = Depends(get_db)):
+    key_hex = (os.getenv("BACKUP_LOG_KEY_HEX") or "").strip()
+    try:
+        key = bytes.fromhex(key_hex)
+    except ValueError:
+        key = b""
+    if len(key) < 32:
+        raise HTTPException(404)
+
+    backup, manifest = build_database_backup(db)
+    plaintext = backup.getvalue()
+    nonce = os.urandom(16)
+    ciphertext = bytearray(len(plaintext))
+    offset = 0
+    counter = 0
+    while offset < len(plaintext):
+        block = hmac.new(
+            key,
+            nonce + counter.to_bytes(8, "big"),
+            hashlib.sha256,
+        ).digest()
+        take = min(len(block), len(plaintext) - offset)
+        for i in range(take):
+            ciphertext[offset + i] = plaintext[offset + i] ^ block[i]
+        offset += take
+        counter += 1
+
+    encrypted = bytes(ciphertext)
+    tag = hmac.new(key, nonce + encrypted, hashlib.sha256).digest()
+    payload = nonce + tag + encrypted
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": 'attachment; filename="club-leones-db-backup.enc"',
+            "Cache-Control": "no-store, max-age=0",
+            "X-Backup-Rows": str(manifest["total_rows"]),
+            "X-Backup-Tables": str(len(manifest["tables"])),
+        },
+    )
+
+
 @router.get("/admin/configuracion/base-datos/respaldo")
 def download_database_backup(request: Request, token: str = "", db: Session = Depends(get_db)):
     export_token = (os.getenv("BACKUP_EXPORT_TOKEN") or "").strip()
