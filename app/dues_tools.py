@@ -104,6 +104,8 @@ def _plan_from_payment(payment: Payment):
     text = f"{payment.concept or ''} {payment.reference or ''}".lower()
     if "anual" in text:
         return "Anual", 12
+    if "semestral" in text:
+        return "Semestral", 6
     if "trimestral" in text:
         return "Trimestral", 3
     return "Mensual", 1

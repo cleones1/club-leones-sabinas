@@ -723,10 +723,10 @@ def pay_member_dues(member_id: int, request: Request, plan: str = Form(...), sta
     sync_finances(db)
     m = db.get(Member, member_id)
     if not m: raise HTTPException(404)
-    plan_months = {"Mensual": 1, "Trimestral": 3, "Anual": 12}
+    plan_months = {"Mensual": 1, "Trimestral": 3, "Semestral": 6, "Anual": 12}
     months_to_cover = plan_months.get((plan or "").strip())
     if not months_to_cover:
-        raise HTTPException(400, "Selecciona un plan Mensual, Trimestral o Anual.")
+        raise HTTPException(400, "Selecciona un plan Mensual, Trimestral, Semestral o Anual.")
     fee = member_monthly_fee(db, m.id)
     if fee <= 0:
         raise HTTPException(400, "Primero configura la cuota mensual para este tipo de socio.")

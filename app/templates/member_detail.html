@@ -25,9 +25,9 @@
 
 <section class="card" id="pago-cuota-socio">
 <div class="section-title"><div><span class="eyebrow">CUOTAS DEL SOCIO</span><h2>Pago de cuota de socio</h2></div><span class="badge success">Membresía permanente</span></div>
-<p>La membresía no vence. La cuota mensual, trimestral o anual <b>ya incluye el acceso a la alberca</b>; no se cobra por separado.</p>
+<p>La membresía no vence. La cuota mensual, trimestral, semestral o anual <b>ya incluye el acceso a la alberca</b>; no se cobra por separado.</p>
 <form id="dues-form" class="compact-form" action="/admin/socios/{{m.id}}/cuota/pagar" method="post" data-monthly="{{member_monthly_fee}}">
-<label>Periodicidad<select id="dues-plan" name="plan" required><option value="Mensual">Mensual</option><option value="Trimestral">Trimestral · 3 meses</option><option value="Anual">Anual · 12 meses</option></select></label>
+<label>Periodicidad<select id="dues-plan" name="plan" required><option value="Mensual">Mensual</option><option value="Trimestral">Trimestral · 3 meses</option><option value="Semestral">Semestral · 6 meses</option><option value="Anual">Anual · 12 meses</option></select></label>
 <label>Mes inicial<input id="dues-start" name="start_period" type="month" required></label>
 <label>Cuota mensual normal<input value="${{"{:,.2f}".format(member_monthly_fee)}}" readonly></label>
 <label>Total estimado<input id="dues-total" readonly></label>
@@ -38,7 +38,7 @@
 <label class="wide">Referencia / nota<input name="reference" placeholder="Opcional"></label>
 <button type="submit">Registrar pago de cuota</button>
 </form>
-<small>Mensual cubre 1 cuota, Trimestral 3 y Anual 12. <b>Extra · modificar cuota mensual</b> permite usar un importe especial únicamente para este pago, sin cambiar la tarifa general del socio. Coronación y Posada siguen siendo cargos opcionales y aparecerán separados en el recibo. Si el periodo elegido tiene recargo, el total final puede ser mayor al estimado.</small>
+<small>Mensual cubre 1 cuota, Trimestral 3, Semestral 6 y Anual 12. <b>Extra · modificar cuota mensual</b> permite usar un importe especial únicamente para este pago, sin cambiar la tarifa general del socio. Coronación y Posada siguen siendo cargos opcionales y aparecerán separados en el recibo. Si el periodo elegido tiene recargo, el total final puede ser mayor al estimado.</small>
 </section>
 
 <section class="card" id="renta-instalaciones">
@@ -94,7 +94,7 @@
 <small>Para clima por hora o por unidad, ajusta la cantidad. En el recibo se mostrará el socio que renta y la fecha de renta.</small>
 </section>
 
-<section class="card"><h2>Membresía del club</h2><div class="member-status"><span class="badge success">Permanente</span><b>Sin vencimiento</b><small>Las cuotas mensual, trimestral o anual no cambian la permanencia de la membresía y ya incluyen el acceso a la alberca durante el periodo pagado.</small></div></section>
+<section class="card"><h2>Membresía del club</h2><div class="member-status"><span class="badge success">Permanente</span><b>Sin vencimiento</b><small>Las cuotas mensual, trimestral, semestral o anual no cambian la permanencia de la membresía y ya incluyen el acceso a la alberca durante el periodo pagado.</small></div></section>
 
 <section class="card"><h2>Historial de pagos</h2><div class="table-wrap"><table><thead><tr><th>Folio</th><th>Fecha</th><th>Concepto</th><th>Método</th><th>Importe</th><th>Acceso alberca</th><th>Recibo</th></tr></thead><tbody>{% for p in m.payments|sort(attribute='paid_at', reverse=true) %}<tr><td>{{p.folio}}</td><td>{{p.paid_at.strftime('%d/%m/%Y')}}</td><td>{{p.concept}}{% if p.id in cancelled_payment_ids %}<small><span class="badge danger">ANULADO</span></small>{% endif %}</td><td>{{p.method}}</td><td>${{"{:,.2f}".format(p.amount)}}</td><td>{% if p.id in cancelled_payment_ids %}—{% elif p.pool_pass %}{{p.pool_pass.plan_type}}<small>{{p.pool_pass.end_date.strftime('%d/%m/%Y')}}</small>{% else %}—{% endif %}</td><td>{% if p.id in cancelled_payment_ids %}<span class="badge danger">Sin efecto</span>{% elif p.concept.startswith('Cuota de socio') %}<a class="mini-btn" target="_blank" href="/recibo-cuota/{{p.id}}.pdf">Imprimir</a>{% else %}<a class="mini-btn" target="_blank" href="/recibo/{{p.id}}.pdf">Imprimir</a>{% endif %}</td></tr>{% else %}<tr><td colspan="7">Sin pagos registrados.</td></tr>{% endfor %}</tbody></table></div></section>
 
@@ -117,7 +117,7 @@
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     if (!start.value) start.value = yyyy + '-' + mm;
     function refreshDues(){
-      const months = plan.value === 'Anual' ? 12 : (plan.value === 'Trimestral' ? 3 : 1);
+      const months = plan.value === 'Anual' ? 12 : (plan.value === 'Semestral' ? 6 : (plan.value === 'Trimestral' ? 3 : 1));
       const effectiveMonthly = specialEnabled.checked ? Math.max(0, Number(special.value || 0)) : monthly;
       const coronacionAmount = coronacionEnabled.checked ? Number(coronacion.value || 0) : 0;
       const posadaAmount = posadaEnabled.checked ? Number(posada.value || 0) : 0;
