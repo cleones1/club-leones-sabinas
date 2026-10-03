@@ -10,7 +10,7 @@ from reportlab.lib.units import mm
 
 from .database import get_db, SessionLocal
 from .models import ClubSetting, MonthlyCharge, Payment, PaymentAudit, PoolPass
-from .core import auth_user, member_billing_type, period_label
+from .core import can_access_member, member_billing_type, period_label
 
 router = APIRouter()
 
@@ -196,11 +196,10 @@ backfill_dues_pool_access_once()
 
 @router.get("/recibo-cuota/{payment_id}.pdf")
 def dues_receipt(payment_id: int, request: Request, db: Session = Depends(get_db)):
-    user = auth_user(request, db)
     payment = db.get(Payment, payment_id)
     if not payment:
         raise HTTPException(404)
-    if not user or (user.role != "admin" and user.member_id != payment.member_id):
+    if not can_access_member(request, db, payment.member_id):
         raise HTTPException(403)
     if db.query(PaymentAudit).filter(
         PaymentAudit.payment_kind == "member",

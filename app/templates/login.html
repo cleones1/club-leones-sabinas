@@ -1,4 +1,28 @@
 {% extends "base.html" %}{% block title %}Acceso · Club de Leones de Sabinas{% endblock %}{% block content %}
-<div class="login-wrap"><section class="hero"><img class="hero-logo" src="https://www.lionsclubs.org/sites/default/files/division/marketing/brand/logos/Cards_Emblem_2Color.jpg" alt="Logo Club de Leones" onerror="this.onerror=null;this.src='/static/icons/icon-192.png'"><span class="eyebrow">CLUB DE LEONES DE SABINAS</span><h1>Socios y membresías, siempre al día.</h1><p>Administra socios, vigencias, pagos y credenciales digitales desde cualquier dispositivo.</p></section>
-<form class="card login-card" action="/login" method="post"><h2>Iniciar sesión</h2>{% if error %}<div class="alert">{{error}}</div>{% endif %}<label>Correo<input name="email" type="email" required placeholder="correo@ejemplo.com"></label><label>Contraseña<input name="password" type="password" required></label><button>Entrar</button><small>Administrador inicial: admin@club.local / Admin123!</small></form></div>
+<div class="login-wrap">
+  <section class="hero">
+    <img class="hero-logo" src="https://www.lionsclubs.org/sites/default/files/division/marketing/brand/logos/Cards_Emblem_2Color.jpg" alt="Logo Club de Leones" onerror="this.onerror=null;this.src='/static/icons/icon-192.png'">
+    <span class="eyebrow">CLUB DE LEONES DE SABINAS</span>
+    <h1>Tu membresía, siempre a la mano.</h1>
+    <p>Consulta tu estado de cuenta y tus credenciales de alberca desde cualquier dispositivo.</p>
+  </section>
+  <div class="login-stack">
+    <form class="card login-card member-login-card" action="/acceso-socio" method="post">
+      <span class="eyebrow">SOCIOS</span>
+      <h2>Acceso de socio</h2>
+      {% if member_error %}<div class="alert">{{member_error}}</div>{% endif %}
+      <label>Número de socio<input name="member_number" type="text" inputmode="numeric" autocomplete="off" required autofocus placeholder="Ej. 1046742"></label>
+      <button>Entrar a mi cuenta</button>
+      <small>Con tu número de socio puedes consultar únicamente tu adeudo y tus credenciales.</small>
+    </form>
+    <form class="card login-card admin-login-card" action="/login" method="post">
+      <span class="eyebrow">ADMINISTRACIÓN</span>
+      <h2>Acceso administrativo</h2>
+      {% if error %}<div class="alert">{{error}}</div>{% endif %}
+      <label>Correo<input name="email" type="email" autocomplete="username" required placeholder="correo@ejemplo.com"></label>
+      <label>Contraseña<input name="password" type="password" autocomplete="current-password" required></label>
+      <button>Entrar como administrador</button>
+    </form>
+  </div>
+</div>
 {% endblock %}

@@ -8,3 +8,11 @@ label small{font-weight:500;color:#71818a}.family-grid{display:grid;grid-templat
 .debt-stat{background:#7b2433!important;border-bottom-color:#ffcc00!important}.debt-stat small{color:#ffd9df;display:block;margin-top:6px}.debt-link{font-weight:850;color:#9e2138}.debt-card{border-left:5px solid #ffcc00}.debt-total{font-size:clamp(38px,7vw,64px);font-weight:900;letter-spacing:-.05em;color:#00338d;margin:10px 0}.danger-text,.money-danger{color:#b62c45}.alert.success{background:#dff8ee;color:#08755b}.section-title span{color:var(--muted);font-weight:700}.card+.card{margin-top:20px}
 @media(max-width:1000px){.stats{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:600px){.stats{grid-template-columns:1fr 1fr}.debt-total{font-size:42px}}
+
+/* Acceso independiente de socios por número de socio */
+.login-stack{display:grid;gap:18px;max-width:430px;width:100%}
+.member-login-card{border-top:5px solid var(--lions-gold)}
+.admin-login-card{border-top:5px solid var(--lions-blue)}
+.login-stack .login-card{max-width:none}
+.login-stack .eyebrow{display:block;margin-bottom:6px}
+@media(max-width:850px){.login-stack{max-width:none}}

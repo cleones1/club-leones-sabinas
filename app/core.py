@@ -371,18 +371,85 @@ def auth_user(request: Request, db: Session):
     return db.get(User, uid) if uid else None
 
 
+def member_from_session(request: Request, db: Session):
+    # Compatibilidad con el acceso anterior por usuario/contraseña.
+    u = auth_user(request, db)
+    if u and u.active and u.role == "member" and u.member and u.member.active:
+        return u.member
+
+    member_id = request.session.get("member_access_id")
+    if not member_id:
+        return None
+    member = db.get(Member, member_id)
+    if not member or not member.active:
+        request.session.pop("member_access_id", None)
+        return None
+    return member
+
+
+def can_access_member(request: Request, db: Session, member_id: int):
+    u = auth_user(request, db)
+    if u and u.active and u.role == "admin":
+        return True
+    member = member_from_session(request, db)
+    return bool(member and member.id == member_id)
+
+
 def require_admin(request: Request, db: Session):
     u = auth_user(request, db)
-    if not u or u.role != "admin":
+    if not u or u.role != "admin" or not u.active:
         raise HTTPException(403)
     return u
 
 
 def require_member(request: Request, db: Session):
+    # Se conserva para compatibilidad con sesiones antiguas de socios.
     u = auth_user(request, db)
-    if not u or u.role != "member" or not u.member:
+    if not u or u.role != "member" or not u.member or not u.active or not u.member.active:
         raise HTTPException(403)
     return u
+
+
+def require_member_record(request: Request, db: Session):
+    member = member_from_session(request, db)
+    if not member:
+        raise HTTPException(403)
+    return member
+
+
+_MEMBER_LOGIN_FAILURES = {}
+_MEMBER_LOGIN_WINDOW = timedelta(minutes=10)
+_MEMBER_LOGIN_MAX_FAILURES = 8
+
+
+def _member_login_client_key(request: Request):
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
+    if forwarded:
+        return forwarded
+    return request.client.host if request.client else "unknown"
+
+
+def _member_login_blocked(request: Request):
+    key = _member_login_client_key(request)
+    cutoff = datetime.utcnow() - _MEMBER_LOGIN_WINDOW
+    attempts = [ts for ts in _MEMBER_LOGIN_FAILURES.get(key, []) if ts >= cutoff]
+    if attempts:
+        _MEMBER_LOGIN_FAILURES[key] = attempts
+    else:
+        _MEMBER_LOGIN_FAILURES.pop(key, None)
+    return len(attempts) >= _MEMBER_LOGIN_MAX_FAILURES
+
+
+def _record_member_login_failure(request: Request):
+    key = _member_login_client_key(request)
+    cutoff = datetime.utcnow() - _MEMBER_LOGIN_WINDOW
+    attempts = [ts for ts in _MEMBER_LOGIN_FAILURES.get(key, []) if ts >= cutoff]
+    attempts.append(datetime.utcnow())
+    _MEMBER_LOGIN_FAILURES[key] = attempts
+
+
+def _clear_member_login_failures(request: Request):
+    _MEMBER_LOGIN_FAILURES.pop(_member_login_client_key(request), None)
 
 
 def parse_optional_date(value: str):
@@ -526,8 +593,10 @@ def health():
 @app.get("/", response_class=HTMLResponse)
 def root(request: Request, db: Session = Depends(get_db)):
     u = auth_user(request, db)
-    if u:
+    if u and u.active:
         return RedirectResponse("/admin" if u.role == "admin" else "/mi-cuenta", 303)
+    if member_from_session(request, db):
+        return RedirectResponse("/mi-cuenta", 303)
     return templates.TemplateResponse("login.html", {"request": request})
 
 
@@ -536,8 +605,34 @@ def login(request: Request, email: str = Form(...), password: str = Form(...), d
     user = db.query(User).filter(func.lower(User.email) == email.strip().lower()).first()
     if not user or not user.active or not verify_password(password, user.password_hash):
         return templates.TemplateResponse("login.html", {"request": request, "error": "Correo o contraseña incorrectos."}, status_code=400)
+    request.session.clear()
     request.session["user_id"] = user.id
     return RedirectResponse("/admin" if user.role == "admin" else "/mi-cuenta", 303)
+
+
+@app.post("/acceso-socio")
+def member_number_login(request: Request, member_number: str = Form(...), db: Session = Depends(get_db)):
+    if _member_login_blocked(request):
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "member_error": "Demasiados intentos. Espera unos minutos e inténtalo de nuevo."},
+            status_code=429,
+        )
+
+    number = (member_number or "").strip()
+    member = db.query(Member).filter(func.lower(Member.member_number) == number.lower()).first() if number else None
+    if not member or not member.active:
+        _record_member_login_failure(request)
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "member_error": "No fue posible validar ese número de socio."},
+            status_code=400,
+        )
+
+    _clear_member_login_failures(request)
+    request.session.clear()
+    request.session["member_access_id"] = member.id
+    return RedirectResponse("/mi-cuenta", 303)
 
 
 @app.get("/logout")
@@ -857,9 +952,8 @@ def toggle_member(member_id: int, request: Request, db: Session = Depends(get_db
 
 @app.get("/mi-cuenta", response_class=HTMLResponse)
 def my_account(request: Request, db: Session = Depends(get_db)):
-    u = require_member(request, db)
+    m = require_member_record(request, db)
     sync_finances(db)
-    m = u.member
     return templates.TemplateResponse("member_portal.html", {"request": request, "m": m, "status": member_status(m), "latest": latest_membership(m), "pool": pool_status(m), "debt_total": member_debt_total(db, m.id), "member_type": member_billing_type(db, m.id), "member_monthly_fee": member_monthly_fee(db, m.id)})
 
 
@@ -968,7 +1062,7 @@ def pay_member_debt(member_id: int, request: Request, amount: float = Form(...),
 
 @app.get("/mi-adeudo", response_class=HTMLResponse)
 def my_debt(request: Request, db: Session = Depends(get_db)):
-    u = require_member(request, db); sync_finances(db); m = u.member
+    m = require_member_record(request, db); sync_finances(db)
     monthly = db.query(MonthlyCharge).filter(MonthlyCharge.member_id == m.id).order_by(MonthlyCharge.period.desc()).all()
     manual = db.query(ManualDebt).filter(ManualDebt.member_id == m.id).order_by(ManualDebt.created_at.desc()).all()
     return templates.TemplateResponse("my_debt.html", {"request": request, "m": m, "monthly": monthly, "manual": manual, "balance": member_debt_total(db, m.id), "monthly_balance": monthly_charge_balance, "manual_balance": manual_debt_balance, "period_label": period_label, "member_type": member_billing_type(db, m.id), "member_monthly_fee": member_monthly_fee(db, m.id)})
@@ -1006,9 +1100,9 @@ def qr_png(token: str, request: Request, db: Session = Depends(get_db)):
 
 @app.get("/credencial/{member_id}.pdf")
 def credential_pdf(member_id: int, request: Request, db: Session = Depends(get_db)):
-    u = auth_user(request, db); m = db.get(Member, member_id)
+    m = db.get(Member, member_id)
     if not m: raise HTTPException(404)
-    if not u or (u.role != "admin" and u.member_id != member_id): raise HTTPException(403)
+    if not can_access_member(request, db, member_id): raise HTTPException(403)
     latest = latest_membership(m); status, _ = member_status(m); base = str(request.base_url).rstrip("/")
     out = io.BytesIO(); width, height = 86*mm, 54*mm; c = canvas.Canvas(out, pagesize=(width, height))
     regular_credential_page(c, m, latest, status, base); c.showPage(); c.save(); out.seek(0)
@@ -1017,9 +1111,9 @@ def credential_pdf(member_id: int, request: Request, db: Session = Depends(get_d
 
 @app.get("/credencial-alberca/{member_id}.pdf")
 def pool_credentials_pdf(member_id: int, request: Request, db: Session = Depends(get_db)):
-    u = auth_user(request, db); m = db.get(Member, member_id)
+    m = db.get(Member, member_id)
     if not m: raise HTTPException(404)
-    if not u or (u.role != "admin" and u.member_id != member_id): raise HTTPException(403)
+    if not can_access_member(request, db, member_id): raise HTTPException(403)
     status, _, p = pool_status(m)
     if not p: raise HTTPException(404, "No hay pago de alberca registrado.")
     base = str(request.base_url).rstrip("/"); out = io.BytesIO(); width, height = 86*mm, 54*mm; c = canvas.Canvas(out, pagesize=(width, height))
@@ -1032,9 +1126,9 @@ def pool_credentials_pdf(member_id: int, request: Request, db: Session = Depends
 
 @app.get("/recibo/{payment_id}.pdf")
 def payment_receipt(payment_id: int, request: Request, db: Session = Depends(get_db)):
-    u = auth_user(request, db); p = db.get(Payment, payment_id)
+    p = db.get(Payment, payment_id)
     if not p: raise HTTPException(404)
-    if not u or (u.role != "admin" and u.member_id != p.member_id): raise HTTPException(403)
+    if not can_access_member(request, db, p.member_id): raise HTTPException(403)
     if db.query(PaymentAudit).filter(
         PaymentAudit.payment_kind == "member",
         PaymentAudit.payment_id == p.id,
