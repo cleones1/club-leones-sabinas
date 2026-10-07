@@ -33,7 +33,8 @@
 <option value="Anual">Anual · pago de 12 meses{% if member_type == 'Regular' %} con 1 mes condonado{% endif %}</option>
 </select></label>
 <label id="dues-installment-wrap" style="display:none">Parcialidad del plan trimestral<select id="dues-installment" name="quarterly_installment"><option value="1">1 de 3</option><option value="2">2 de 3</option><option value="3">3 de 3</option></select><small>Las tres parcialidades completan la anualidad.</small></label>
-<label><span id="dues-start-label">Mes inicial</span><input id="dues-start" name="start_period" type="month" required><small id="dues-start-note"></small></label>
+<label id="dues-start-wrap"><span id="dues-start-label">Mes inicial</span><input id="dues-start" name="start_period" type="month" required><small id="dues-start-note"></small></label>
+<label id="dues-accounting-wrap" style="display:none">Año contable de alberca<input value="27/07/2026 al 30/06/2027" readonly><small>La credencial no tendrá vigencia fuera de estas fechas.</small></label>
 <label>Cuota mensual normal<input value="${{"{:,.2f}".format(member_monthly_fee)}}" readonly></label>
 <label>Total estimado<input id="dues-total" readonly></label>
 <label id="dues-plan-amount-wrap" style="display:none"><span id="dues-plan-amount-label">Importe base del plan</span><input id="dues-plan-amount" name="regular_plan_amount" type="number" min="0.01" step="0.01" value="0.00" disabled><small id="dues-plan-amount-note">Editable para este pago.</small></label>
@@ -45,7 +46,7 @@
 <label class="wide">Referencia / nota<input name="reference" placeholder="Opcional"></label>
 <button type="submit">Registrar pago de cuota</button>
 </form>
-<small>{% if member_type == 'Regular' %}<b>Trimestral:</b> no son 3 meses de cuota; es la anualidad pagada en 3 parcialidades mensuales. La anualidad tiene 1 mes condonado y cada parcialidad cubre 4 meses del año. <b>Anual:</b> liquida los 12 meses en un solo pago con 1 mes condonado. {% else %}El plan trimestral cubre 3 mensualidades y el anual 12. {% endif %}La comisión por meses sin intereses, Coronación y Posada se agregan por separado.</small>
+<small>{% if member_type == 'Regular' %}<b>Trimestral:</b> no son 3 meses de cuota; es la anualidad pagada en 3 parcialidades mensuales. La anualidad tiene 1 mes condonado y cada parcialidad cubre 4 meses del año. <b>Anual:</b> liquida los 12 meses en un solo pago con 1 mes condonado. {% else %}El plan trimestral cubre 3 mensualidades y el anual 12. {% endif %}<b>Año contable de alberca: 27/07/2026 al 30/06/2027.</b> Ninguna credencial anual o de las 3 parcialidades saldrá de ese rango. La comisión por meses sin intereses, Coronación y Posada se agregan por separado.</small>
 </section>
 
 <section class="card" id="renta-instalaciones">
@@ -111,8 +112,10 @@
   if (duesForm) {
     const plan = document.getElementById('dues-plan');
     const start = document.getElementById('dues-start');
+    const startWrap = document.getElementById('dues-start-wrap');
     const startLabel = document.getElementById('dues-start-label');
     const startNote = document.getElementById('dues-start-note');
+    const accountingWrap = document.getElementById('dues-accounting-wrap');
     const installmentWrap = document.getElementById('dues-installment-wrap');
     const installment = document.getElementById('dues-installment');
     const total = document.getElementById('dues-total');
@@ -168,19 +171,24 @@
     function refreshPlanAmount(resetValue){
       const quarterly = isRegularQuarterly();
       const eligible = regularPlanEligible();
+      const accountingYear = quarterly || plan.value === 'Anual';
       installmentWrap.style.display = quarterly ? '' : 'none';
       installment.disabled = !quarterly;
       planAmountWrap.style.display = eligible ? '' : 'none';
       planAmount.disabled = !eligible;
+      startWrap.style.display = accountingYear ? 'none' : '';
+      start.disabled = accountingYear;
+      start.required = !accountingYear;
+      accountingWrap.style.display = accountingYear ? '' : 'none';
 
       if (quarterly) {
         startLabel.textContent = 'Mes inicial de la anualidad';
-        startNote.textContent = 'Usa el mismo mes inicial en las 3 parcialidades.';
+        startNote.textContent = 'Año contable fijo: 27/07/2026 al 30/06/2027.';
         planAmountLabel.textContent = 'Importe base de esta parcialidad';
         planAmountNote.textContent = 'Sugerido: 1/3 de la anualidad con 1 mes condonado. Editable para este pago.';
       } else if (isRegularAnnual()) {
         startLabel.textContent = 'Mes inicial de la anualidad';
-        startNote.textContent = 'El pago cubrirá 12 meses desde este periodo.';
+        startNote.textContent = 'Año contable fijo: 27/07/2026 al 30/06/2027.';
         planAmountLabel.textContent = 'Importe base anual';
         planAmountNote.textContent = 'Sugerido: 11 mensualidades; 1 mes queda condonado.';
       } else {

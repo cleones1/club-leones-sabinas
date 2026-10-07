@@ -10,7 +10,7 @@ from reportlab.lib.units import mm
 
 from .database import get_db, SessionLocal
 from .models import ClubSetting, MonthlyCharge, Payment, PaymentAudit, PoolPass
-from .core import can_access_member, member_billing_type, period_label
+from .core import can_access_member, member_billing_type, period_label, normalize_pool_accounting_passes
 
 router = APIRouter()
 
@@ -236,6 +236,21 @@ def backfill_dues_pool_access_once():
 
 
 backfill_dues_pool_access_once()
+
+
+def normalize_pool_accounting_passes_on_startup():
+    db = SessionLocal()
+    try:
+        if normalize_pool_accounting_passes(db):
+            db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+normalize_pool_accounting_passes_on_startup()
 
 
 @router.get("/recibo-cuota/{payment_id}.pdf")

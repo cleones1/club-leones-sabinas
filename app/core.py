@@ -81,6 +81,51 @@ SPANISH_MONTHS = ("", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Ju
 
 MEMBER_TYPES = ("Regular", "Pensionado")
 
+# Año contable vigente para acceso de alberca.
+POOL_ACCOUNTING_START = date(2026, 7, 27)
+POOL_ACCOUNTING_MONTH_START = date(2026, 7, 1)
+POOL_ACCOUNTING_END = date(2027, 6, 30)
+
+
+def pool_accounting_access_dates(plan_type: str, installment: int = 0):
+    label = (plan_type or "").strip().lower()
+    if label == "anual":
+        return POOL_ACCOUNTING_START, POOL_ACCOUNTING_END
+    if label.startswith("trimestral anual"):
+        if installment == 1:
+            return POOL_ACCOUNTING_START, date(2026, 10, 31)
+        if installment == 2:
+            return date(2026, 11, 1), date(2027, 2, 28)
+        if installment == 3:
+            return date(2027, 3, 1), POOL_ACCOUNTING_END
+    return None
+
+
+def normalize_pool_accounting_passes(db: Session):
+    """Alinea credenciales anuales/3 pagos al ciclo contable vigente."""
+    changed = False
+    for pool_pass in db.query(PoolPass).all():
+        label = (pool_pass.plan_type or "").strip()
+        dates = None
+
+        if label == "Anual":
+            # Sólo toca pases que se cruzan con el ciclo 2026-2027.
+            if pool_pass.end_date >= POOL_ACCOUNTING_START and pool_pass.start_date <= POOL_ACCOUNTING_END:
+                dates = (POOL_ACCOUNTING_START, POOL_ACCOUNTING_END)
+
+        elif label.startswith("Trimestral anual "):
+            try:
+                installment = int(label.split("Trimestral anual ", 1)[1].split("/", 1)[0])
+            except (TypeError, ValueError, IndexError):
+                installment = 0
+            dates = pool_accounting_access_dates("Trimestral anual", installment)
+
+        if dates and (pool_pass.start_date != dates[0] or pool_pass.end_date != dates[1]):
+            pool_pass.start_date, pool_pass.end_date = dates
+            changed = True
+
+    return changed
+
 
 def normalize_member_type(value: str):
     return "Pensionado" if (value or "").strip().lower() == "pensionado" else "Regular"
@@ -882,14 +927,15 @@ def pay_member_dues(
     special_fee = special_fee if special_fee > 0 else None
     plan_monthly_fee = special_fee or fee
 
-    annual_start = month_start_from_period(start_period)
+    is_regular_quarterly_annual = member_type == "Regular" and plan == "Trimestral"
+    uses_accounting_year = is_regular_quarterly_annual or plan == "Anual"
+    annual_start = POOL_ACCOUNTING_MONTH_START if uses_accounting_year else month_start_from_period(start_period)
     cursor = annual_start
     months_to_cover = 1
     plan_base_total = None
     plan_discount = 0.0
     annual_plan_total = None
     installment_label = ""
-    is_regular_quarterly_annual = member_type == "Regular" and plan == "Trimestral"
 
     if is_regular_quarterly_annual:
         try:
@@ -984,7 +1030,7 @@ def pay_member_dues(
     covered = []
     base_remaining = plan_base_total
     attempts = 0
-    max_attempts = 4 if is_regular_quarterly_annual else 48
+    max_attempts = 4 if is_regular_quarterly_annual else (12 if plan == "Anual" else 48)
 
     while len(covered) < months_to_cover and attempts < max_attempts:
         period = f"{cursor.year:04d}-{cursor.month:02d}"
@@ -993,10 +1039,10 @@ def pay_member_dues(
             MonthlyCharge.period == period,
         ).first()
 
-        if is_regular_quarterly_annual and charge and monthly_charge_balance(charge) <= 0:
+        if (is_regular_quarterly_annual or plan == "Anual") and charge and monthly_charge_balance(charge) <= 0:
             raise HTTPException(
                 400,
-                f"{period_label(period)} ya está cubierto. Revisa el mes inicial o la parcialidad seleccionada."
+                f"{period_label(period)} ya está cubierto dentro del año contable 27/07/2026–30/06/2027."
             )
 
         if charge and monthly_charge_balance(charge) <= 0:
@@ -1131,14 +1177,21 @@ def pay_member_dues(
             amount=balance,
         ))
 
-    access_start = month_start_from_period(first_period)
-    access_last_month = month_start_from_period(last_period)
-    access_end = date(
-        access_last_month.year,
-        access_last_month.month,
-        calendar.monthrange(access_last_month.year, access_last_month.month)[1],
-    )
     pool_plan_name = f"Trimestral anual {quarterly_installment}/3" if is_regular_quarterly_annual else plan
+    accounting_dates = pool_accounting_access_dates(
+        "Trimestral anual" if is_regular_quarterly_annual else plan,
+        quarterly_installment if is_regular_quarterly_annual else 0,
+    )
+    if accounting_dates:
+        access_start, access_end = accounting_dates
+    else:
+        access_start = month_start_from_period(first_period)
+        access_last_month = month_start_from_period(last_period)
+        access_end = date(
+            access_last_month.year,
+            access_last_month.month,
+            calendar.monthrange(access_last_month.year, access_last_month.month)[1],
+        )
     db.add(PoolPass(
         member_id=m.id,
         payment_id=payment.id,
@@ -1161,8 +1214,11 @@ def add_payment(member_id: int, request: Request, concept: str = Form(...), amou
     db.add(payment); db.flush()
     plan = pool_plan.strip()
     if plan in ("Mensual", "Anual"):
-        start = parse_optional_date(pool_start_date) or date.today()
-        end = next_month_end(start) if plan == "Mensual" else annual_end(start)
+        if plan == "Anual":
+            start, end = POOL_ACCOUNTING_START, POOL_ACCOUNTING_END
+        else:
+            start = parse_optional_date(pool_start_date) or date.today()
+            end = next_month_end(start)
         db.add(PoolPass(member_id=m.id, payment_id=payment.id, plan_type=plan, start_date=start, end_date=end, amount=amount))
     db.commit()
     return RedirectResponse(f"/admin/socios/{m.id}", 303)
