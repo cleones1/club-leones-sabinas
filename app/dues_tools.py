@@ -102,10 +102,10 @@ def _wrap(text: str, limit: int = 37):
 
 def _plan_from_payment(payment: Payment):
     text = f"{payment.concept or ''} {payment.reference or ''}".lower()
+    if "trimestral anual" in text:
+        return "Trimestral anual", 4
     if "anual" in text:
         return "Anual", 12
-    if "semestral" in text:
-        return "Semestral", 6
     if "trimestral" in text:
         return "Trimestral", 3
     return "Mensual", 1
@@ -146,6 +146,26 @@ def _plan_discount_from_payment(payment: Payment):
             except (TypeError, ValueError):
                 return 0.0
     return 0.0
+
+
+def _annual_plan_amount_from_payment(payment: Payment):
+    for piece in (payment.concept or "").split("·"):
+        item = piece.strip()
+        prefix = "Anualidad base $"
+        if item.startswith(prefix):
+            try:
+                return max(0.0, round(float(item[len(prefix):].strip()), 2))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _installment_from_payment(payment: Payment):
+    for piece in (payment.concept or "").split("·"):
+        item = piece.strip()
+        if item.startswith("Parcialidad ") and "/3" in item:
+            return item
+    return ""
 
 
 def _optional_charges_from_payment(payment: Payment):
@@ -256,6 +276,8 @@ def dues_receipt(payment_id: int, request: Request, db: Session = Depends(get_db
     standard_expected = round(monthly_total * months, 2)
     plan_base_amount = _regular_plan_amount_from_payment(payment)
     plan_discount = _plan_discount_from_payment(payment)
+    annual_plan_amount = _annual_plan_amount_from_payment(payment)
+    installment_text = _installment_from_payment(payment)
     expected = plan_base_amount if plan_base_amount is not None else standard_expected
     optional_charges = _optional_charges_from_payment(payment)
     optional_total = round(sum(amount for _, amount in optional_charges), 2)
@@ -276,7 +298,7 @@ def dues_receipt(payment_id: int, request: Request, db: Session = Depends(get_db
 
     ticket_width = 80 * mm
     margin = 5 * mm
-    extra_lines = len(breakdown) + len(optional_charges) + (1 if plan_discount > 0 else 0) + (1 if abs(adjustment) >= 0.01 else 0)
+    extra_lines = len(breakdown) + len(optional_charges) + (2 if installment_text else 0) + (1 if plan_discount > 0 else 0) + (1 if abs(adjustment) >= 0.01 else 0)
     ticket_height = max(175 * mm, (145 + extra_lines * 14 + len(period_lines) * 10) * 1.0)
 
     out = io.BytesIO()
@@ -301,22 +323,36 @@ def dues_receipt(payment_id: int, request: Request, db: Session = Depends(get_db
     c.drawCentredString(w / 2, y, f"Folio: {payment.folio}")
     y -= 15
 
+    periodicity_text = plan_name
+    if installment_text:
+        periodicity_text += f" · {installment_text}"
+    elif plan_name != "Mensual":
+        periodicity_text += f" · {months} mes(es)"
+
     details = [
         ("Fecha", payment.paid_at.strftime("%d/%m/%Y %H:%M")),
         ("Socio", f"{member.first_name} {member.last_name}"),
         ("Número", member.member_number),
         ("Tipo", member_label),
-        ("Periodicidad", f"{plan_name} · {months} mes(es)"),
+        ("Periodicidad", periodicity_text),
     ]
+    if installment_text:
+        details.append(("Cobertura parcialidad", f"{months} meses"))
     if period_lines:
         details.append(("Periodo cubierto", period_lines[0]))
     if special_monthly_fee is not None:
         details.append(("Cuota especial", "$" + f"{special_monthly_fee:,.2f} por mes"))
     if plan_base_amount is not None:
         details.append(("Importe base plan", "$" + f"{plan_base_amount:,.2f}"))
+        if annual_plan_amount is not None:
+            details.append(("Anualidad base", "$" + f"{annual_plan_amount:,.2f}"))
         if plan_discount > 0:
-            benefit_label = "1 mes condonado" if "1 mes condonado" in (payment.concept or "") else "Beneficio del plan"
+            benefit_label = "Beneficio en parcialidad" if installment_text else (
+                "1 mes condonado" if "1 mes condonado" in (payment.concept or "") else "Beneficio del plan"
+            )
             details.append((benefit_label, "-$" + f"{plan_discount:,.2f}"))
+        if "1 mes condonado anual" in (payment.concept or ""):
+            details.append(("Beneficio anual", "1 mes condonado al completar las 3 parcialidades"))
     if payment.reference:
         details.append(("Referencia", payment.reference))
 

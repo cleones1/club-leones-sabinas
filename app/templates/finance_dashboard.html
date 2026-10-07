@@ -37,9 +37,9 @@
 </section>
 
 <div class="detail-grid">
-<section class="card"><h2>Cuota base por tipo de socio</h2><p>La cuota mensual es la base. Para el socio Regular, Trimestral y Anual proponen 1 mes condonado y el importe base puede editarse al registrar cada pago; la comisión por meses sin intereses, Coronación y Posada se capturan por separado.</p>
+<section class="card"><h2>Cuota base por tipo de socio</h2><p>La cuota mensual es la base. Para el socio Regular, el plan Trimestral corresponde a la anualidad pagada en 3 parcialidades mensuales; entre las tres se cubren 12 meses y se condona 1 mensualidad. El plan Anual cubre los mismos 12 meses en un solo pago con 1 mensualidad condonada. Los importes base pueden editarse al registrar cada pago; la comisión por meses sin intereses, Coronación y Posada se capturan por separado.</p>
 <form class="compact-form" action="/admin/finanzas/mensualidad" method="post">
-<label>Socio regular · mensual<input type="number" name="regular_amount" min="0" step="0.01" value="{{'%.2f'|format(monthly_fee)}}" required><small>Trimestral sugerido: ${{"{:,.2f}".format(monthly_fee * 2)}} · Anual sugerido: ${{"{:,.2f}".format(monthly_fee * 11)}}</small></label>
+<label>Socio regular · mensual<input type="number" name="regular_amount" min="0" step="0.01" value="{{'%.2f'|format(monthly_fee)}}" required><small>Anualidad trimestral sugerida: ${{"{:,.2f}".format(monthly_fee * 11)}} en 3 parcialidades · Anual contado: ${{"{:,.2f}".format(monthly_fee * 11)}}</small></label>
 <label>Socio pensionado · mensual<input type="number" name="pensionado_amount" min="0" step="0.01" value="{{'%.2f'|format(monthly_fee_pensionado)}}" required><small>Trimestral: ${{"{:,.2f}".format(monthly_fee_pensionado * 3)}} · Anual: ${{"{:,.2f}".format(monthly_fee_pensionado * 12)}}</small></label>
 <button>Guardar cuotas</button></form>
 <hr><small>Fecha límite: día 30 de cada mes. Si una cuota mensual no se liquida, se agrega automáticamente un recargo del 10% sobre la cuota base correspondiente.</small></section>

@@ -843,6 +843,7 @@ def pay_member_dues(
     request: Request,
     plan: str = Form(...),
     start_period: str = Form(""),
+    quarterly_installment: int = Form(1),
     method: str = Form(...),
     reference: str = Form(""),
     regular_plan_amount: float = Form(0),
@@ -859,51 +860,144 @@ def pay_member_dues(
         raise HTTPException(404)
 
     plan = (plan or "").strip()
-    plan_months = {"Mensual": 1, "Trimestral": 3, "Semestral": 6, "Anual": 12}
-    months_to_cover = plan_months.get(plan)
-    if not months_to_cover:
-        raise HTTPException(400, "Selecciona un plan Mensual, Trimestral, Semestral o Anual.")
+    if plan not in ("Mensual", "Trimestral", "Anual"):
+        raise HTTPException(400, "Selecciona un plan Mensual, Trimestral o Anual.")
 
     member_type = member_billing_type(db, m.id)
     fee = member_monthly_fee(db, m.id)
     if fee <= 0:
         raise HTTPException(400, "Primero configura la cuota mensual para este tipo de socio.")
 
-    numeric_values = (regular_plan_amount, special_monthly_fee, msi_commission_amount, coronacion_amount, posada_amount)
+    numeric_values = (
+        regular_plan_amount,
+        special_monthly_fee,
+        msi_commission_amount,
+        coronacion_amount,
+        posada_amount,
+    )
     if any(not math.isfinite(value or 0) for value in numeric_values):
         raise HTTPException(400, "Uno de los importes capturados no es válido.")
 
     special_fee = round(max(0.0, float(special_monthly_fee or 0)), 2)
     special_fee = special_fee if special_fee > 0 else None
+    plan_monthly_fee = special_fee or fee
 
+    annual_start = month_start_from_period(start_period)
+    cursor = annual_start
+    months_to_cover = 1
     plan_base_total = None
     plan_discount = 0.0
-    if special_fee is None and member_type == "Regular" and plan in ("Trimestral", "Anual"):
-        standard_total = round(fee * months_to_cover, 2)
-        suggested_total = round(fee * (months_to_cover - 1), 2)
-        plan_base_total = round(float(regular_plan_amount or 0), 2)
+    annual_plan_total = None
+    installment_label = ""
+    is_regular_quarterly_annual = member_type == "Regular" and plan == "Trimestral"
+
+    if is_regular_quarterly_annual:
+        try:
+            quarterly_installment = int(quarterly_installment)
+        except (TypeError, ValueError):
+            quarterly_installment = 0
+        if quarterly_installment not in (1, 2, 3):
+            raise HTTPException(400, "Selecciona la parcialidad 1, 2 o 3 del plan trimestral.")
+
+        annual_plan_total = round(plan_monthly_fee * 11, 2)
+        first_installment = round(annual_plan_total / 3, 2)
+        suggested_installments = (
+            first_installment,
+            first_installment,
+            round(annual_plan_total - first_installment * 2, 2),
+        )
+        suggested_amount = suggested_installments[quarterly_installment - 1]
+        plan_base_total = round(float(regular_plan_amount or 0), 2) or suggested_amount
+
+        standard_installment_value = round(plan_monthly_fee * 4, 2)
         if plan_base_total <= 0:
-            plan_base_total = suggested_total
+            raise HTTPException(400, "El importe base de la parcialidad debe ser mayor a cero.")
+        if plan_base_total > standard_installment_value:
+            raise HTTPException(
+                400,
+                f"El importe base de esta parcialidad no puede superar ${standard_installment_value:,.2f}. "
+                "Captura la comisión de meses sin intereses en su campo separado."
+            )
+        plan_discount = round(standard_installment_value - plan_base_total, 2)
+
+        annual_period = f"{annual_start.year:04d}-{annual_start.month:02d}"
+        cancelled_ids = db.query(PaymentAudit.payment_id).filter(
+            PaymentAudit.payment_kind == "member",
+            PaymentAudit.action == "cancelled",
+        )
+        existing = db.query(Payment).filter(
+            Payment.member_id == m.id,
+            Payment.concept.like("%Trimestral anual%"),
+            Payment.reference.like(f"%Anualidad {annual_period}%"),
+            Payment.reference.like(f"%Parcialidad {quarterly_installment}/3%"),
+            ~Payment.id.in_(cancelled_ids),
+        ).first()
+        if existing:
+            raise HTTPException(
+                400,
+                f"La parcialidad {quarterly_installment}/3 de esta anualidad ya fue registrada."
+            )
+
+        if quarterly_installment > 1:
+            previous = db.query(Payment).filter(
+                Payment.member_id == m.id,
+                Payment.concept.like("%Trimestral anual%"),
+                Payment.reference.like(f"%Anualidad {annual_period}%"),
+                Payment.reference.like(f"%Parcialidad {quarterly_installment - 1}/3%"),
+                ~Payment.id.in_(cancelled_ids),
+            ).first()
+            if not previous:
+                raise HTTPException(
+                    400,
+                    f"Primero registra la parcialidad {quarterly_installment - 1}/3 de esta anualidad."
+                )
+
+        cursor = shift_months(annual_start, (quarterly_installment - 1) * 4)
+        months_to_cover = 4
+        installment_label = f"Parcialidad {quarterly_installment}/3"
+
+    elif member_type == "Regular" and plan == "Anual":
+        months_to_cover = 12
+        standard_total = round(plan_monthly_fee * 12, 2)
+        suggested_total = round(plan_monthly_fee * 11, 2)
+        annual_plan_total = suggested_total
+        plan_base_total = round(float(regular_plan_amount or 0), 2) or suggested_total
+        if plan_base_total <= 0:
+            raise HTTPException(400, "El importe base anual debe ser mayor a cero.")
         if plan_base_total > standard_total:
             raise HTTPException(
                 400,
-                f"El importe base del plan {plan} no puede superar ${standard_total:,.2f}. Captura la comisión de meses sin intereses en su campo separado."
+                f"El importe base anual no puede superar ${standard_total:,.2f}. "
+                "Captura la comisión de meses sin intereses en su campo separado."
             )
         plan_discount = round(standard_total - plan_base_total, 2)
 
-    cursor = month_start_from_period(start_period)
+    elif plan == "Trimestral":
+        # Para Pensionado se conserva el esquema de tres mensualidades.
+        months_to_cover = 3
+
+    elif plan == "Anual":
+        months_to_cover = 12
+
     today = date.today()
     current_month = date(today.year, today.month, 1)
     covered = []
     base_remaining = plan_base_total
     attempts = 0
+    max_attempts = 4 if is_regular_quarterly_annual else 48
 
-    while len(covered) < months_to_cover and attempts < 48:
+    while len(covered) < months_to_cover and attempts < max_attempts:
         period = f"{cursor.year:04d}-{cursor.month:02d}"
         charge = db.query(MonthlyCharge).filter(
             MonthlyCharge.member_id == m.id,
             MonthlyCharge.period == period,
         ).first()
+
+        if is_regular_quarterly_annual and charge and monthly_charge_balance(charge) <= 0:
+            raise HTTPException(
+                400,
+                f"{period_label(period)} ya está cubierto. Revisa el mes inicial o la parcialidad seleccionada."
+            )
 
         if charge and monthly_charge_balance(charge) <= 0:
             cursor = shift_months(cursor, 1)
@@ -914,7 +1008,7 @@ def pay_member_dues(
             charge = MonthlyCharge(
                 member_id=m.id,
                 period=period,
-                base_amount=fee,
+                base_amount=plan_monthly_fee,
                 late_fee=0,
                 paid_amount=0,
                 due_date=monthly_due_date(cursor.year, cursor.month),
@@ -922,19 +1016,28 @@ def pay_member_dues(
             db.add(charge)
             db.flush()
 
-        if special_fee is not None:
+        if plan_base_total is not None:
             if round(charge.paid_amount or 0, 2) > 0:
-                raise HTTPException(400, f"No se puede aplicar cuota especial a {period_label(period)} porque ya tiene un abono parcial.")
-            charge.base_amount = special_fee
-            charge.late_fee = round(special_fee * 0.10, 2) if today > charge.due_date else 0
-
-        elif plan_base_total is not None:
-            if round(charge.paid_amount or 0, 2) > 0:
-                raise HTTPException(400, f"No se puede aplicar el importe preferencial del plan {plan} a {period_label(period)} porque ya tiene un abono parcial.")
-            month_base = min(fee, max(0.0, round(base_remaining or 0.0, 2)))
+                raise HTTPException(
+                    400,
+                    f"No se puede aplicar el plan a {period_label(period)} porque ya tiene un abono parcial."
+                )
+            month_base = min(
+                plan_monthly_fee,
+                max(0.0, round(base_remaining or 0.0, 2)),
+            )
             charge.base_amount = month_base
             charge.late_fee = round(month_base * 0.10, 2) if today > charge.due_date else 0
             base_remaining = round(max(0.0, (base_remaining or 0.0) - month_base), 2)
+
+        elif special_fee is not None:
+            if round(charge.paid_amount or 0, 2) > 0:
+                raise HTTPException(
+                    400,
+                    f"No se puede aplicar cuota especial a {period_label(period)} porque ya tiene un abono parcial."
+                )
+            charge.base_amount = special_fee
+            charge.late_fee = round(special_fee * 0.10, 2) if today > charge.due_date else 0
 
         elif (charge.paid_amount or 0) == 0 and cursor >= current_month:
             charge.base_amount = fee
@@ -965,22 +1068,41 @@ def pay_member_dues(
     last_period = covered[-1][0].period
     next_id = (db.query(func.max(Payment.id)).scalar() or 0) + 1
 
-    note = f"{plan}: {period_label(first_period)} a {period_label(last_period)}"
+    if is_regular_quarterly_annual:
+        annual_period = f"{annual_start.year:04d}-{annual_start.month:02d}"
+        annual_last = shift_months(annual_start, 11)
+        note = (
+            f"Anualidad {annual_period} · Parcialidad {quarterly_installment}/3 · "
+            f"Cobertura {period_label(first_period)} a {period_label(last_period)}"
+        )
+        concept_parts = [
+            "Cuota de socio",
+            "Trimestral anual",
+            installment_label,
+        ]
+    else:
+        note = f"{plan}: {period_label(first_period)} a {period_label(last_period)}"
+        concept_parts = [f"Cuota de socio · {plan}"]
+
     if plan_discount > 0:
-        note += f" · Beneficio plan ${plan_discount:.2f}"
+        note += f" · Beneficio ${plan_discount:.2f}"
+
     extra = (reference or "").strip()
     if extra:
         note += f" · {extra}"
 
-    concept_parts = [f"Cuota de socio · {plan}"]
     if special_fee is not None:
         concept_parts.append("Cuota especial $" + f"{special_fee:.2f}")
     if plan_base_total is not None:
         concept_parts.append("Plan regular $" + f"{plan_base_total:.2f}")
         if plan_discount > 0:
             concept_parts.append(f"Descuento de plan ${plan_discount:.2f}")
-            if abs(plan_discount - fee) < 0.01:
-                concept_parts.append("1 mes condonado")
+        if annual_plan_total is not None:
+            concept_parts.append(f"Anualidad base ${annual_plan_total:.2f}")
+        if is_regular_quarterly_annual:
+            concept_parts.append("1 mes condonado anual")
+        elif abs(plan_discount - plan_monthly_fee) < 0.01:
+            concept_parts.append("1 mes condonado")
     if msi_commission_amount > 0:
         concept_parts.append(f"Comisión meses sin intereses ${msi_commission_amount:.2f}")
     if coronacion_amount > 0:
@@ -1016,10 +1138,11 @@ def pay_member_dues(
         access_last_month.month,
         calendar.monthrange(access_last_month.year, access_last_month.month)[1],
     )
+    pool_plan_name = f"Trimestral anual {quarterly_installment}/3" if is_regular_quarterly_annual else plan
     db.add(PoolPass(
         member_id=m.id,
         payment_id=payment.id,
-        plan_type=plan,
+        plan_type=pool_plan_name,
         start_date=access_start,
         end_date=access_end,
         amount=0,
