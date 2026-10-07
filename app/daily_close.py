@@ -58,10 +58,10 @@ def local_time_text(value: datetime | None):
 
 
 def optional_dues_charges(concept: str):
-    found = {"Coronación": 0.0, "Posada": 0.0}
+    found = {"Coronación": 0.0, "Posada": 0.0, "Comisión meses sin intereses": 0.0}
     for piece in (concept or "").split("·"):
         item = piece.strip()
-        for label in ("Coronación", "Posada"):
+        for label in ("Coronación", "Posada", "Comisión meses sin intereses"):
             prefix = f"{label} $"
             if item.startswith(prefix):
                 try:
@@ -180,7 +180,7 @@ def build_daily_close(db: Session, selected: date):
 
         extras = optional_dues_charges(payment.concept)
         extras_total = 0.0
-        for label in ("Coronación", "Posada"):
+        for label in ("Coronación", "Posada", "Comisión meses sin intereses"):
             amount = min(
                 max(0.0, round(payment_amount - monthly_total - manual_total - extras_total, 2)),
                 extras[label],

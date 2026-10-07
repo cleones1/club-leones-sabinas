@@ -26,11 +26,13 @@
 <section class="card" id="pago-cuota-socio">
 <div class="section-title"><div><span class="eyebrow">CUOTAS DEL SOCIO</span><h2>Pago de cuota de socio</h2></div><span class="badge success">Membresía permanente</span></div>
 <p>La membresía no vence. La cuota mensual, trimestral, semestral o anual <b>ya incluye el acceso a la alberca</b>; no se cobra por separado.</p>
-<form id="dues-form" class="compact-form" action="/admin/socios/{{m.id}}/cuota/pagar" method="post" data-monthly="{{member_monthly_fee}}">
-<label>Periodicidad<select id="dues-plan" name="plan" required><option value="Mensual">Mensual</option><option value="Trimestral">Trimestral · 3 meses</option><option value="Semestral">Semestral · 6 meses</option><option value="Anual">Anual · 12 meses</option></select></label>
+<form id="dues-form" class="compact-form" action="/admin/socios/{{m.id}}/cuota/pagar" method="post" data-monthly="{{member_monthly_fee}}" data-member-type="{{member_type}}">
+<label>Periodicidad<select id="dues-plan" name="plan" required><option value="Mensual">Mensual</option><option value="Trimestral">Trimestral · 3 meses{% if member_type == 'Regular' %} · 1 mes condonado{% endif %}</option><option value="Semestral">Semestral · 6 meses</option><option value="Anual">Anual · 12 meses{% if member_type == 'Regular' %} · 1 mes condonado{% endif %}</option></select></label>
 <label>Mes inicial<input id="dues-start" name="start_period" type="month" required></label>
 <label>Cuota mensual normal<input value="${{"{:,.2f}".format(member_monthly_fee)}}" readonly></label>
 <label>Total estimado<input id="dues-total" readonly></label>
+<label id="dues-plan-amount-wrap" style="display:none">Importe base del plan<input id="dues-plan-amount" name="regular_plan_amount" type="number" min="0.01" step="0.01" value="0.00" disabled><small>Editable para este pago.</small></label>
+<label><span><input id="dues-msi-enabled" type="checkbox"> Comisión por meses sin intereses</span><input id="dues-msi" name="msi_commission_amount" type="number" min="0" step="0.01" value="0.00" disabled placeholder="Importe de comisión"></label>
 <label><span><input id="dues-special-enabled" type="checkbox"> Extra · modificar cuota mensual</span><input id="dues-special" name="special_monthly_fee" type="number" min="0.01" step="0.01" value="{{'%.2f'|format(member_monthly_fee)}}" disabled placeholder="Nueva cuota mensual"><small>Sólo modifica este pago y los meses que cubre.</small></label>
 <label><span><input id="dues-coronacion-enabled" type="checkbox"> Agregar Coronación</span><input id="dues-coronacion" name="coronacion_amount" type="number" min="0" step="0.01" value="0.00" disabled placeholder="Importe"></label>
 <label><span><input id="dues-posada-enabled" type="checkbox"> Agregar Posada</span><input id="dues-posada" name="posada_amount" type="number" min="0" step="0.01" value="0.00" disabled placeholder="Importe"></label>
@@ -38,7 +40,7 @@
 <label class="wide">Referencia / nota<input name="reference" placeholder="Opcional"></label>
 <button type="submit">Registrar pago de cuota</button>
 </form>
-<small>Mensual cubre 1 cuota, Trimestral 3, Semestral 6 y Anual 12. <b>Extra · modificar cuota mensual</b> permite usar un importe especial únicamente para este pago, sin cambiar la tarifa general del socio. Coronación y Posada siguen siendo cargos opcionales y aparecerán separados en el recibo. Si el periodo elegido tiene recargo, el total final puede ser mayor al estimado.</small>
+<small>Mensual cubre 1 cuota, Trimestral 3, Semestral 6 y Anual 12. {% if member_type == 'Regular' %}En Trimestral y Anual se propone un importe con <b>1 mes condonado</b>, pero puedes editar el importe base en cada pago. {% endif %}La <b>comisión por meses sin intereses</b>, Coronación y Posada se agregan por separado y aparecerán identificadas en el recibo. <b>Extra · modificar cuota mensual</b> reemplaza el cálculo del plan para ese pago. Los recargos vencidos se agregan aparte.</small>
 </section>
 
 <section class="card" id="renta-instalaciones">
@@ -105,6 +107,10 @@
     const plan = document.getElementById('dues-plan');
     const start = document.getElementById('dues-start');
     const total = document.getElementById('dues-total');
+    const planAmountWrap = document.getElementById('dues-plan-amount-wrap');
+    const planAmount = document.getElementById('dues-plan-amount');
+    const msiEnabled = document.getElementById('dues-msi-enabled');
+    const msi = document.getElementById('dues-msi');
     const specialEnabled = document.getElementById('dues-special-enabled');
     const special = document.getElementById('dues-special');
     const coronacionEnabled = document.getElementById('dues-coronacion-enabled');
@@ -112,26 +118,60 @@
     const posadaEnabled = document.getElementById('dues-posada-enabled');
     const posada = document.getElementById('dues-posada');
     const monthly = Number(duesForm.dataset.monthly || 0);
+    const memberType = duesForm.dataset.memberType || 'Regular';
     const now = new Date();
     const yyyy = now.getFullYear();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     if (!start.value) start.value = yyyy + '-' + mm;
+    function monthsForPlan(){
+      return plan.value === 'Anual' ? 12 : (plan.value === 'Semestral' ? 6 : (plan.value === 'Trimestral' ? 3 : 1));
+    }
+    function regularPlanEligible(){
+      return memberType === 'Regular' && (plan.value === 'Trimestral' || plan.value === 'Anual');
+    }
+    function suggestedPlanAmount(){
+      const months = monthsForPlan();
+      return monthly * Math.max(0, months - 1);
+    }
+    function refreshPlanAmount(resetValue){
+      const eligible = regularPlanEligible() && !specialEnabled.checked;
+      planAmountWrap.style.display = eligible ? '' : 'none';
+      planAmount.disabled = !eligible;
+      if (eligible && (resetValue || !Number(planAmount.value || 0))) {
+        planAmount.value = suggestedPlanAmount().toFixed(2);
+      }
+    }
     function refreshDues(){
-      const months = plan.value === 'Anual' ? 12 : (plan.value === 'Semestral' ? 6 : (plan.value === 'Trimestral' ? 3 : 1));
-      const effectiveMonthly = specialEnabled.checked ? Math.max(0, Number(special.value || 0)) : monthly;
+      const months = monthsForPlan();
+      let baseTotal;
+      if (specialEnabled.checked) {
+        baseTotal = Math.max(0, Number(special.value || 0)) * months;
+      } else if (regularPlanEligible()) {
+        baseTotal = Math.max(0, Number(planAmount.value || suggestedPlanAmount()));
+      } else {
+        baseTotal = monthly * months;
+      }
+      const msiAmount = msiEnabled.checked ? Number(msi.value || 0) : 0;
       const coronacionAmount = coronacionEnabled.checked ? Number(coronacion.value || 0) : 0;
       const posadaAmount = posadaEnabled.checked ? Number(posada.value || 0) : 0;
-      total.value = (effectiveMonthly * months + coronacionAmount + posadaAmount).toLocaleString('es-MX', {style:'currency', currency:'MXN'});
+      total.value = (baseTotal + msiAmount + coronacionAmount + posadaAmount).toLocaleString('es-MX', {style:'currency', currency:'MXN'});
     }
     function toggleOptional(check, input){
       input.disabled = !check.checked;
       if (!check.checked) input.value = '0.00';
       refreshDues();
     }
-    plan.addEventListener('change', refreshDues);
+    plan.addEventListener('change', () => {
+      refreshPlanAmount(true);
+      refreshDues();
+    });
+    planAmount.addEventListener('input', refreshDues);
+    msiEnabled.addEventListener('change', () => toggleOptional(msiEnabled, msi));
+    msi.addEventListener('input', refreshDues);
     specialEnabled.addEventListener('change', () => {
       special.disabled = !specialEnabled.checked;
       if (!specialEnabled.checked) special.value = monthly.toFixed(2);
+      refreshPlanAmount(false);
       refreshDues();
     });
     special.addEventListener('input', refreshDues);
@@ -139,6 +179,7 @@
     posadaEnabled.addEventListener('change', () => toggleOptional(posadaEnabled, posada));
     coronacion.addEventListener('input', refreshDues);
     posada.addEventListener('input', refreshDues);
+    refreshPlanAmount(true);
     refreshDues();
   }
 })();

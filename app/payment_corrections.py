@@ -152,8 +152,13 @@ def cancel_member_payment(payment_id:int, request:Request, reason:str=Form(...),
             charge=db.get(MonthlyCharge,allocation.target_id)
             if charge:
                 charge.paid_amount=max(0.0,round(float(charge.paid_amount or 0)-amount,2))
-                if "Cuota especial $" in (payment.concept or "") and charge.paid_amount<=0:
-                    charge.base_amount=member_monthly_fee(db,payment.member_id); charge.late_fee=0
+                if (
+                    "Cuota especial $" in (payment.concept or "")
+                    or "Plan regular $" in (payment.concept or "")
+                ) and charge.paid_amount<=0:
+                    normal_fee=member_monthly_fee(db,payment.member_id)
+                    charge.base_amount=normal_fee
+                    charge.late_fee=round(normal_fee*0.10,2) if date.today()>charge.due_date else 0
         elif allocation.target_type=="manual":
             debt=db.get(ManualDebt,allocation.target_id)
             if debt: debt.paid_amount=max(0.0,round(float(debt.paid_amount or 0)-amount,2))

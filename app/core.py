@@ -184,6 +184,22 @@ def ensure_monthly_charges(db: Session, target_day: date | None = None, update_c
             db.add(MonthlyCharge(member_id=member.id, period=period, base_amount=amount, late_fee=0, paid_amount=0, due_date=due))
             changed = True
         elif charge and update_current_amount and (charge.paid_amount or 0) == 0:
+            linked_ids = [
+                payment_id for (payment_id,) in db.query(DebtPaymentAllocation.payment_id).filter(
+                    DebtPaymentAllocation.target_type == "monthly",
+                    DebtPaymentAllocation.target_id == charge.id,
+                ).all()
+            ]
+            if linked_ids:
+                cancelled_ids = {
+                    payment_id for (payment_id,) in db.query(PaymentAudit.payment_id).filter(
+                        PaymentAudit.payment_kind == "member",
+                        PaymentAudit.action == "cancelled",
+                        PaymentAudit.payment_id.in_(linked_ids),
+                    ).all()
+                }
+                if any(payment_id not in cancelled_ids for payment_id in linked_ids):
+                    continue
             if round(charge.base_amount or 0, 2) != round(amount, 2):
                 charge.base_amount = amount
                 if target_day <= charge.due_date:
@@ -225,6 +241,7 @@ INCOME_CATEGORIES = (
     "Cuotas y recargos",
     "Coronación",
     "Posada",
+    "Comisión meses sin intereses",
     "Rentas a socios",
     "Rentas de salones al público",
     "Ventas a socios",
@@ -235,10 +252,10 @@ INCOME_CATEGORIES = (
 
 
 def _optional_dues_charges(concept: str):
-    found = {"Coronación": 0.0, "Posada": 0.0}
+    found = {"Coronación": 0.0, "Posada": 0.0, "Comisión meses sin intereses": 0.0}
     for piece in (concept or "").split("·"):
         item = piece.strip()
-        for label in ("Coronación", "Posada"):
+        for label in ("Coronación", "Posada", "Comisión meses sin intereses"):
             prefix = f"{label} $"
             if item.startswith(prefix):
                 try:
@@ -289,16 +306,24 @@ def income_breakdown(db: Session, start_at: datetime | None = None, end_at: date
             extras = _optional_dues_charges(payment.concept)
             coronacion = min(amount, extras["Coronación"])
             posada = min(max(0.0, amount - coronacion), extras["Posada"])
+            commission = min(
+                max(0.0, amount - coronacion - posada),
+                extras["Comisión meses sin intereses"],
+            )
             allocated_monthly = round(sum(
                 float(a.amount or 0)
                 for a in (payment.debt_allocations or [])
                 if a.target_type == "monthly"
             ), 2)
-            dues_amount = allocated_monthly or max(0.0, round(amount - coronacion - posada, 2))
+            dues_amount = allocated_monthly or max(
+                0.0,
+                round(amount - coronacion - posada - commission, 2),
+            )
             totals["Cuotas y recargos"] += dues_amount
             totals["Coronación"] += coronacion
             totals["Posada"] += posada
-            remainder = round(amount - dues_amount - coronacion - posada, 2)
+            totals["Comisión meses sin intereses"] += commission
+            remainder = round(amount - dues_amount - coronacion - posada - commission, 2)
             if remainder > 0.009:
                 totals["Otros ingresos"] += remainder
             continue
@@ -813,96 +838,177 @@ def add_membership(member_id: int, request: Request, membership_type: str = Form
 
 
 @app.post("/admin/socios/{member_id}/cuota/pagar")
-def pay_member_dues(member_id: int, request: Request, plan: str = Form(...), start_period: str = Form(""), method: str = Form(...), reference: str = Form(""), special_monthly_fee: float = Form(0), coronacion_amount: float = Form(0), posada_amount: float = Form(0), db: Session = Depends(get_db)):
+def pay_member_dues(
+    member_id: int,
+    request: Request,
+    plan: str = Form(...),
+    start_period: str = Form(""),
+    method: str = Form(...),
+    reference: str = Form(""),
+    regular_plan_amount: float = Form(0),
+    special_monthly_fee: float = Form(0),
+    msi_commission_amount: float = Form(0),
+    coronacion_amount: float = Form(0),
+    posada_amount: float = Form(0),
+    db: Session = Depends(get_db),
+):
     require_admin(request, db)
     sync_finances(db)
     m = db.get(Member, member_id)
-    if not m: raise HTTPException(404)
+    if not m:
+        raise HTTPException(404)
+
+    plan = (plan or "").strip()
     plan_months = {"Mensual": 1, "Trimestral": 3, "Semestral": 6, "Anual": 12}
-    months_to_cover = plan_months.get((plan or "").strip())
+    months_to_cover = plan_months.get(plan)
     if not months_to_cover:
         raise HTTPException(400, "Selecciona un plan Mensual, Trimestral, Semestral o Anual.")
+
+    member_type = member_billing_type(db, m.id)
     fee = member_monthly_fee(db, m.id)
     if fee <= 0:
         raise HTTPException(400, "Primero configura la cuota mensual para este tipo de socio.")
-    if not math.isfinite(special_monthly_fee or 0):
-        raise HTTPException(400, "El importe de cuota especial no es válido.")
-    special_fee = round(float(special_monthly_fee or 0), 2)
-    if special_fee < 0:
-        raise HTTPException(400, "La cuota especial no puede ser negativa.")
+
+    numeric_values = (regular_plan_amount, special_monthly_fee, msi_commission_amount, coronacion_amount, posada_amount)
+    if any(not math.isfinite(value or 0) for value in numeric_values):
+        raise HTTPException(400, "Uno de los importes capturados no es válido.")
+
+    special_fee = round(max(0.0, float(special_monthly_fee or 0)), 2)
     special_fee = special_fee if special_fee > 0 else None
+
+    plan_base_total = None
+    plan_discount = 0.0
+    if special_fee is None and member_type == "Regular" and plan in ("Trimestral", "Anual"):
+        standard_total = round(fee * months_to_cover, 2)
+        suggested_total = round(fee * (months_to_cover - 1), 2)
+        plan_base_total = round(float(regular_plan_amount or 0), 2)
+        if plan_base_total <= 0:
+            plan_base_total = suggested_total
+        if plan_base_total > standard_total:
+            raise HTTPException(
+                400,
+                f"El importe base del plan {plan} no puede superar ${standard_total:,.2f}. Captura la comisión de meses sin intereses en su campo separado."
+            )
+        plan_discount = round(standard_total - plan_base_total, 2)
+
     cursor = month_start_from_period(start_period)
     today = date.today()
     current_month = date(today.year, today.month, 1)
-    targets = []
+    covered = []
+    base_remaining = plan_base_total
     attempts = 0
-    while len(targets) < months_to_cover and attempts < 48:
+
+    while len(covered) < months_to_cover and attempts < 48:
         period = f"{cursor.year:04d}-{cursor.month:02d}"
-        charge = db.query(MonthlyCharge).filter(MonthlyCharge.member_id == m.id, MonthlyCharge.period == period).first()
+        charge = db.query(MonthlyCharge).filter(
+            MonthlyCharge.member_id == m.id,
+            MonthlyCharge.period == period,
+        ).first()
+
+        if charge and monthly_charge_balance(charge) <= 0:
+            cursor = shift_months(cursor, 1)
+            attempts += 1
+            continue
+
         if not charge:
             charge = MonthlyCharge(
                 member_id=m.id,
                 period=period,
-                base_amount=special_fee if special_fee is not None else fee,
+                base_amount=fee,
                 late_fee=0,
                 paid_amount=0,
                 due_date=monthly_due_date(cursor.year, cursor.month),
             )
-            db.add(charge); db.flush()
-        else:
-            # Los periodos ya liquidados se omiten y se continúa al siguiente pendiente.
-            if monthly_charge_balance(charge) <= 0:
-                cursor = shift_months(cursor, 1)
-                attempts += 1
-                continue
-            if special_fee is not None:
-                if round(charge.paid_amount or 0, 2) > 0:
-                    raise HTTPException(
-                        400,
-                        f"No se puede aplicar cuota especial a {period_label(period)} porque ya tiene un abono parcial."
-                    )
-                charge.base_amount = special_fee
-                charge.late_fee = 0
-            elif (charge.paid_amount or 0) == 0 and cursor >= current_month:
-                charge.base_amount = fee
-                charge.late_fee = 0
+            db.add(charge)
+            db.flush()
+
+        if special_fee is not None:
+            if round(charge.paid_amount or 0, 2) > 0:
+                raise HTTPException(400, f"No se puede aplicar cuota especial a {period_label(period)} porque ya tiene un abono parcial.")
+            charge.base_amount = special_fee
+            charge.late_fee = round(special_fee * 0.10, 2) if today > charge.due_date else 0
+
+        elif plan_base_total is not None:
+            if round(charge.paid_amount or 0, 2) > 0:
+                raise HTTPException(400, f"No se puede aplicar el importe preferencial del plan {plan} a {period_label(period)} porque ya tiene un abono parcial.")
+            month_base = min(fee, max(0.0, round(base_remaining or 0.0, 2)))
+            charge.base_amount = month_base
+            charge.late_fee = round(month_base * 0.10, 2) if today > charge.due_date else 0
+            base_remaining = round(max(0.0, (base_remaining or 0.0) - month_base), 2)
+
+        elif (charge.paid_amount or 0) == 0 and cursor >= current_month:
+            charge.base_amount = fee
+            charge.late_fee = 0
 
         base_pending = round((charge.base_amount or 0) - (charge.paid_amount or 0), 2)
         if today > charge.due_date and base_pending > 0 and (charge.late_fee or 0) == 0:
             charge.late_fee = round((charge.base_amount or 0) * 0.10, 2)
+
         balance = monthly_charge_balance(charge)
-        if balance > 0:
-            targets.append((charge, balance))
+        covered.append((charge, balance))
         cursor = shift_months(cursor, 1)
         attempts += 1
-    if len(targets) < months_to_cover:
+
+    if len(covered) < months_to_cover:
         raise HTTPException(400, "No fue posible determinar todos los periodos de la cuota seleccionada.")
-    dues_total = round(sum(balance for _, balance in targets), 2)
-    coronacion_amount = round(max(0.0, coronacion_amount or 0), 2)
-    posada_amount = round(max(0.0, posada_amount or 0), 2)
-    total = round(dues_total + coronacion_amount + posada_amount, 2)
-    first_period = targets[0][0].period
-    last_period = targets[-1][0].period
+
+    if plan_base_total is not None and round(base_remaining or 0.0, 2) > 0.009:
+        raise HTTPException(400, "El importe base del plan no pudo distribuirse entre los meses seleccionados.")
+
+    dues_total = round(sum(balance for _, balance in covered), 2)
+    msi_commission_amount = round(max(0.0, float(msi_commission_amount or 0)), 2)
+    coronacion_amount = round(max(0.0, float(coronacion_amount or 0)), 2)
+    posada_amount = round(max(0.0, float(posada_amount or 0)), 2)
+    total = round(dues_total + msi_commission_amount + coronacion_amount + posada_amount, 2)
+
+    first_period = covered[0][0].period
+    last_period = covered[-1][0].period
     next_id = (db.query(func.max(Payment.id)).scalar() or 0) + 1
+
     note = f"{plan}: {period_label(first_period)} a {period_label(last_period)}"
+    if plan_discount > 0:
+        note += f" · Beneficio plan ${plan_discount:.2f}"
     extra = (reference or "").strip()
     if extra:
         note += f" · {extra}"
+
     concept_parts = [f"Cuota de socio · {plan}"]
     if special_fee is not None:
         concept_parts.append("Cuota especial $" + f"{special_fee:.2f}")
+    if plan_base_total is not None:
+        concept_parts.append("Plan regular $" + f"{plan_base_total:.2f}")
+        if plan_discount > 0:
+            concept_parts.append(f"Descuento de plan ${plan_discount:.2f}")
+            if abs(plan_discount - fee) < 0.01:
+                concept_parts.append("1 mes condonado")
+    if msi_commission_amount > 0:
+        concept_parts.append(f"Comisión meses sin intereses ${msi_commission_amount:.2f}")
     if coronacion_amount > 0:
         concept_parts.append(f"Coronación ${coronacion_amount:.2f}")
     if posada_amount > 0:
         concept_parts.append(f"Posada ${posada_amount:.2f}")
-    payment = Payment(member_id=m.id, folio=f"PAG-{next_id:06d}", concept=" · ".join(concept_parts), amount=total, method=method, reference=note[:120])
-    db.add(payment); db.flush()
-    for charge, balance in targets:
-        charge.paid_amount = round((charge.paid_amount or 0) + balance, 2)
-        db.add(DebtPaymentAllocation(payment_id=payment.id, target_type="monthly", target_id=charge.id, amount=balance))
 
-    # El acceso de alberca ya está incluido en la cuota del socio.
-    # La vigencia sigue exactamente los meses cubiertos por este pago.
+    payment = Payment(
+        member_id=m.id,
+        folio=f"PAG-{next_id:06d}",
+        concept=" · ".join(concept_parts),
+        amount=total,
+        method=method,
+        reference=note[:120],
+    )
+    db.add(payment)
+    db.flush()
+
+    for charge, balance in covered:
+        if balance > 0:
+            charge.paid_amount = round((charge.paid_amount or 0) + balance, 2)
+        db.add(DebtPaymentAllocation(
+            payment_id=payment.id,
+            target_type="monthly",
+            target_id=charge.id,
+            amount=balance,
+        ))
+
     access_start = month_start_from_period(first_period)
     access_last_month = month_start_from_period(last_period)
     access_end = date(

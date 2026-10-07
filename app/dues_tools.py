@@ -124,11 +124,35 @@ def _special_monthly_fee_from_payment(payment: Payment):
     return None
 
 
+def _regular_plan_amount_from_payment(payment: Payment):
+    for piece in (payment.concept or "").split("·"):
+        item = piece.strip()
+        prefix = "Plan regular $"
+        if item.startswith(prefix):
+            try:
+                return max(0.0, round(float(item[len(prefix):].strip()), 2))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _plan_discount_from_payment(payment: Payment):
+    for piece in (payment.concept or "").split("·"):
+        item = piece.strip()
+        prefix = "Descuento de plan $"
+        if item.startswith(prefix):
+            try:
+                return max(0.0, round(float(item[len(prefix):].strip()), 2))
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
+
+
 def _optional_charges_from_payment(payment: Payment):
     charges = []
     for piece in (payment.concept or "").split("·"):
         item = piece.strip()
-        for label in ("Coronación", "Posada"):
+        for label in ("Coronación", "Posada", "Comisión meses sin intereses"):
             prefix = f"{label} $"
             if item.startswith(prefix):
                 try:
@@ -229,7 +253,10 @@ def dues_receipt(payment_id: int, request: Request, db: Session = Depends(get_db
     months = len(monthly_allocations) or inferred_months
     months = max(1, months)
 
-    expected = round(monthly_total * months, 2)
+    standard_expected = round(monthly_total * months, 2)
+    plan_base_amount = _regular_plan_amount_from_payment(payment)
+    plan_discount = _plan_discount_from_payment(payment)
+    expected = plan_base_amount if plan_base_amount is not None else standard_expected
     optional_charges = _optional_charges_from_payment(payment)
     optional_total = round(sum(amount for _, amount in optional_charges), 2)
     adjustment = round(payment.amount - expected - optional_total, 2)
@@ -249,7 +276,7 @@ def dues_receipt(payment_id: int, request: Request, db: Session = Depends(get_db
 
     ticket_width = 80 * mm
     margin = 5 * mm
-    extra_lines = len(breakdown) + len(optional_charges) + (1 if abs(adjustment) >= 0.01 else 0)
+    extra_lines = len(breakdown) + len(optional_charges) + (1 if plan_discount > 0 else 0) + (1 if abs(adjustment) >= 0.01 else 0)
     ticket_height = max(175 * mm, (145 + extra_lines * 14 + len(period_lines) * 10) * 1.0)
 
     out = io.BytesIO()
@@ -285,6 +312,11 @@ def dues_receipt(payment_id: int, request: Request, db: Session = Depends(get_db
         details.append(("Periodo cubierto", period_lines[0]))
     if special_monthly_fee is not None:
         details.append(("Cuota especial", "$" + f"{special_monthly_fee:,.2f} por mes"))
+    if plan_base_amount is not None:
+        details.append(("Importe base plan", "$" + f"{plan_base_amount:,.2f}"))
+        if plan_discount > 0:
+            benefit_label = "1 mes condonado" if "1 mes condonado" in (payment.concept or "") else "Beneficio del plan"
+            details.append((benefit_label, "-$" + f"{plan_discount:,.2f}"))
     if payment.reference:
         details.append(("Referencia", payment.reference))
 
@@ -315,10 +347,21 @@ def dues_receipt(payment_id: int, request: Request, db: Session = Depends(get_db
         y -= 11
 
     y -= 2
-    c.setFont("Helvetica-Bold", 8)
-    c.drawString(margin, y, "BASE MENSUAL")
-    c.drawRightString(w - margin, y, f"${monthly_total:,.2f}")
-    y -= 12
+    if plan_base_amount is not None:
+        if plan_discount > 0:
+            c.setFont("Helvetica", 7.7)
+            c.drawString(margin, y, "Beneficio / condonación")
+            c.drawRightString(w - margin, y, f"-${plan_discount:,.2f}")
+            y -= 11
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(margin, y, "IMPORTE BASE DEL PLAN")
+        c.drawRightString(w - margin, y, f"${plan_base_amount:,.2f}")
+        y -= 12
+    else:
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(margin, y, "BASE MENSUAL")
+        c.drawRightString(w - margin, y, f"${monthly_total:,.2f}")
+        y -= 12
 
     if optional_charges:
         y -= 2
