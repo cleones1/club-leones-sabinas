@@ -135,6 +135,22 @@ class ManualDebt(Base):
     paid_amount = Column(Float, nullable=False, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     member = relationship("Member", back_populates="manual_debts")
+    cancellation = relationship(
+        "ManualDebtCancellation",
+        back_populates="debt",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+
+class ManualDebtCancellation(Base):
+    __tablename__ = "manual_debt_cancellations"
+    id = Column(Integer, primary_key=True)
+    manual_debt_id = Column(Integer, ForeignKey("manual_debts.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
+    concept = Column(String(300), nullable=False)
+    admin_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    debt = relationship("ManualDebt", back_populates="cancellation")
 
 
 class DebtPaymentAllocation(Base):

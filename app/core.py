@@ -17,7 +17,7 @@ from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 
 from .database import Base, engine, get_db, SessionLocal
-from .models import Member, MemberPhoto, FamilyMember, Membership, Payment, PoolPass, ClubSetting, MemberBillingProfile, MonthlyCharge, ManualDebt, DebtPaymentAllocation, PaymentAudit, User
+from .models import Member, MemberPhoto, FamilyMember, Membership, Payment, PoolPass, ClubSetting, MemberBillingProfile, MonthlyCharge, ManualDebt, ManualDebtCancellation, DebtPaymentAllocation, PaymentAudit, User
 from .public_models import PublicRental, PublicRentalPayment
 from .auth import hash_password, verify_password
 
@@ -206,6 +206,8 @@ def monthly_charge_balance(charge: MonthlyCharge):
 
 
 def manual_debt_balance(debt: ManualDebt):
+    if debt.cancellation:
+        return 0.0
     return max(0.0, round((debt.amount or 0) - (debt.paid_amount or 0), 2))
 
 
@@ -1304,7 +1306,20 @@ def member_debt_page(member_id: int, request: Request, db: Session = Depends(get
     monthly = db.query(MonthlyCharge).filter(MonthlyCharge.member_id == m.id).order_by(MonthlyCharge.period.desc()).all()
     manual = db.query(ManualDebt).filter(ManualDebt.member_id == m.id).order_by(ManualDebt.created_at.desc()).all()
     payment_id = request.query_params.get("pago")
-    return templates.TemplateResponse("member_debt.html", {"request": request, "m": m, "monthly": monthly, "manual": manual, "balance": member_debt_total(db, m.id), "monthly_balance": monthly_charge_balance, "manual_balance": manual_debt_balance, "period_label": period_label, "payment_id": int(payment_id) if payment_id and payment_id.isdigit() else None, "member_type": member_billing_type(db, m.id), "member_monthly_fee": member_monthly_fee(db, m.id)})
+    return templates.TemplateResponse("member_debt.html", {
+        "request": request,
+        "m": m,
+        "monthly": monthly,
+        "manual": manual,
+        "balance": member_debt_total(db, m.id),
+        "monthly_balance": monthly_charge_balance,
+        "manual_balance": manual_debt_balance,
+        "period_label": period_label,
+        "payment_id": int(payment_id) if payment_id and payment_id.isdigit() else None,
+        "debt_cancelled": request.query_params.get("adeudo_cancelado") == "1",
+        "member_type": member_billing_type(db, m.id),
+        "member_monthly_fee": member_monthly_fee(db, m.id),
+    })
 
 
 @app.post("/admin/socios/{member_id}/adeudo/agregar")
@@ -1315,6 +1330,43 @@ def add_manual_debt(member_id: int, request: Request, concept: str = Form(...), 
     if amount <= 0: raise HTTPException(400, "El adeudo debe ser mayor a cero.")
     db.add(ManualDebt(member_id=m.id, concept=concept.strip() or "Saldo pendiente", amount=round(amount, 2), paid_amount=0)); db.commit()
     return RedirectResponse(f"/admin/socios/{m.id}/adeudo", 303)
+
+
+@app.post("/admin/socios/{member_id}/adeudo/{debt_id}/cancelar")
+def cancel_manual_debt(
+    member_id: int,
+    debt_id: int,
+    request: Request,
+    cancellation_concept: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    admin = require_admin(request, db)
+    debt = db.query(ManualDebt).filter(
+        ManualDebt.id == debt_id,
+        ManualDebt.member_id == member_id,
+    ).first()
+    if not debt:
+        raise HTTPException(404, "Adeudo no encontrado.")
+    if debt.cancellation:
+        raise HTTPException(400, "Este adeudo ya está cancelado.")
+    if manual_debt_balance(debt) <= 0:
+        raise HTTPException(400, "Este adeudo ya está liquidado y no tiene saldo por cancelar.")
+
+    concept = (cancellation_concept or "").strip()
+    if len(concept) < 3:
+        raise HTTPException(400, "Captura el concepto de la cancelación.")
+    concept = concept[:300]
+
+    db.add(ManualDebtCancellation(
+        manual_debt_id=debt.id,
+        concept=concept,
+        admin_user_id=admin.id,
+    ))
+    db.commit()
+    return RedirectResponse(
+        f"/admin/socios/{member_id}/adeudo?adeudo_cancelado=1",
+        303,
+    )
 
 
 @app.post("/admin/socios/{member_id}/adeudo/pagar")
