@@ -70,7 +70,7 @@ class Payment(Base):
     id = Column(Integer, primary_key=True)
     member_id = Column(Integer, ForeignKey("members.id"), nullable=False)
     folio = Column(String(40), unique=True, index=True, nullable=False)
-    concept = Column(String(160), nullable=False)
+    concept = Column(String(500), nullable=False)
     amount = Column(Float, nullable=False)
     method = Column(String(60), nullable=False)
     reference = Column(String(120), default="")

@@ -31,6 +31,20 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 Base.metadata.create_all(bind=engine)
 
 
+def ensure_schema_compatibility():
+    # create_all crea tablas nuevas, pero no amplía columnas existentes.
+    # Los conceptos de cuotas con anualidad, parcialidades y cargos separados
+    # pueden superar el límite histórico de 160 caracteres.
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                "ALTER TABLE payments ALTER COLUMN concept TYPE VARCHAR(500)"
+            )
+
+
+ensure_schema_compatibility()
+
+
 def seed_admin():
     db = SessionLocal()
     try:
