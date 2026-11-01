@@ -302,7 +302,7 @@ def daily_close(request: Request, fecha: str = "", db: Session = Depends(get_db)
         selected = datetime.now(LOCAL_TZ).date()
 
     close = build_daily_close(db, selected)
-    return templates.TemplateResponse("daily_close.html", {
+    return templates.TemplateResponse(request, "daily_close.html", {
         "request": request,
         "selected_date": selected,
         "selected_iso": selected.isoformat(),

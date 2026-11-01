@@ -17,7 +17,7 @@ from .models import (
     ClubSetting, MemberBillingProfile, MonthlyCharge, ManualDebt,
     DebtPaymentAllocation, User,
 )
-from .auth import hash_password
+from .auth import hash_password, password_policy_error
 
 BASE_DIR = Path(__file__).resolve().parent
 router = APIRouter()
@@ -190,7 +190,7 @@ def download_database_backup(request: Request, db: Session = Depends(get_db)):
 def render_settings(request: Request, db: Session, current: User, error: str = ""):
     admins = db.query(User).filter(User.role == "admin").order_by(User.id.asc()).all()
     orphans = orphan_counts(db)
-    return templates.TemplateResponse("admin_settings.html", {
+    return templates.TemplateResponse(request, "admin_settings.html", {
         "request": request,
         "current": current,
         "admins": admins,
@@ -222,8 +222,9 @@ def create_admin(
     normalized = (email or "").strip().lower()
     if not normalized or "@" not in normalized:
         return render_settings(request, db, current, "Ingresa un correo válido para el administrador.")
-    if len(password or "") < 8:
-        return render_settings(request, db, current, "La contraseña debe tener al menos 8 caracteres.")
+    password_error = password_policy_error(password)
+    if password_error:
+        return render_settings(request, db, current, password_error)
     if db.query(User).filter(func.lower(User.email) == normalized).first():
         return render_settings(request, db, current, "Ya existe un usuario con ese correo.")
     db.add(User(email=normalized, password_hash=hash_password(password), role="admin", member_id=None, active=True))
@@ -259,8 +260,9 @@ def reset_admin_password(
     target = db.get(User, user_id)
     if not target or target.role != "admin":
         raise HTTPException(404)
-    if len(password or "") < 8:
-        return render_settings(request, db, current, "La nueva contraseña debe tener al menos 8 caracteres.")
+    password_error = password_policy_error(password)
+    if password_error:
+        return render_settings(request, db, current, password_error)
     target.password_hash = hash_password(password)
     db.commit()
     return RedirectResponse("/admin/configuracion?actualizado=1", 303)

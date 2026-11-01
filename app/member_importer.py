@@ -43,7 +43,11 @@ def _col_index(cell_ref: str):
 def _shared_strings(zf: zipfile.ZipFile):
     if "xl/sharedStrings.xml" not in zf.namelist():
         return []
-    root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+    raw = zf.read("xl/sharedStrings.xml")
+    upper = raw[:4096].upper()
+    if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
+        raise ValueError("El XLSX contiene XML no permitido.")
+    root = ET.fromstring(raw)
     out = []
     for si in root.findall(f"{{{SS_NS}}}si"):
         parts = [node.text or "" for node in si.iter(f"{{{SS_NS}}}t")]
@@ -72,6 +76,13 @@ def _xlsx_rows(raw: bytes):
         raise ValueError("El archivo no es un XLSX válido.")
 
     with zf:
+        entries = zf.infolist()
+        total_uncompressed = sum(info.file_size for info in entries)
+        if total_uncompressed > 100 * 1024 * 1024:
+            raise ValueError("El XLSX expandido supera el límite de seguridad.")
+        if any(info.file_size > 50 * 1024 * 1024 for info in entries):
+            raise ValueError("El XLSX contiene un archivo interno demasiado grande.")
+
         shared = _shared_strings(zf)
         sheet_files = sorted(
             name for name in zf.namelist()
@@ -79,7 +90,11 @@ def _xlsx_rows(raw: bytes):
         )
         if not sheet_files:
             raise ValueError("El archivo no contiene hojas de cálculo.")
-        root = ET.fromstring(zf.read(sheet_files[0]))
+        sheet_raw = zf.read(sheet_files[0])
+        upper = sheet_raw[:4096].upper()
+        if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
+            raise ValueError("El XLSX contiene XML no permitido.")
+        root = ET.fromstring(sheet_raw)
         rows = []
         for row in root.iter(f"{{{SS_NS}}}row"):
             values = {}
@@ -237,7 +252,7 @@ def _source_records(raw: bytes):
 
 
 def _render(request, db, error="", result=None):
-    return templates.TemplateResponse("member_import.html", {
+    return templates.TemplateResponse(request, "member_import.html", {
         "request": request,
         "error": error,
         "result": result,

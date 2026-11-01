@@ -3,6 +3,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse,
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from urllib.parse import urlsplit
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from pathlib import Path
@@ -19,11 +21,74 @@ from reportlab.lib.utils import ImageReader
 from .database import Base, engine, get_db, SessionLocal
 from .models import Member, MemberPhoto, FamilyMember, Membership, Payment, PoolPass, ClubSetting, MemberBillingProfile, MonthlyCharge, ManualDebt, ManualDebtCancellation, DebtPaymentAllocation, PaymentAudit, User
 from .public_models import PublicRental, PublicRentalPayment
-from .auth import hash_password, verify_password
+from .auth import hash_password, verify_password, password_needs_rehash
 
 BASE_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Club de Leones de Sabinas")
-app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET") or secrets.token_urlsafe(32), same_site="lax")
+SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_urlsafe(48)
+MAX_REQUEST_BODY = 64 * 1024 * 1024
+
+app = FastAPI(
+    title="Club de Leones de Sabinas",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+    session_cookie="club_session",
+    same_site="lax",
+    https_only=True,
+    max_age=12 * 60 * 60,
+)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            content_length = request.headers.get("content-length")
+            if content_length:
+                try:
+                    if int(content_length) > MAX_REQUEST_BODY:
+                        return JSONResponse({"detail": "La solicitud es demasiado grande."}, status_code=413)
+                except ValueError:
+                    return JSONResponse({"detail": "Content-Length inválido."}, status_code=400)
+
+            source = request.headers.get("origin") or request.headers.get("referer")
+            if source:
+                try:
+                    source_host = (urlsplit(source).hostname or "").lower()
+                except ValueError:
+                    source_host = ""
+                request_host = (request.headers.get("host") or "").split(":", 1)[0].lower()
+                if not source_host or source_host != request_host:
+                    return JSONResponse({"detail": "Origen de solicitud no permitido."}, status_code=403)
+
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; img-src 'self' data: https://www.lionsclubs.org; "
+            "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
+            "font-src 'self' data:; connect-src 'self'; object-src 'none'; "
+            "base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
+        )
+        proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "").lower()
+        if proto == "https":
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+
+        private_prefixes = ("/admin", "/mi-", "/credencial", "/recibo")
+        if request.url.path == "/" or request.url.path.startswith(private_prefixes):
+            response.headers["Cache-Control"] = "no-store, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["X-Robots-Tag"] = "noindex, nofollow"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
@@ -506,12 +571,12 @@ def require_member_record(request: Request, db: Session):
 _MEMBER_LOGIN_FAILURES = {}
 _MEMBER_LOGIN_WINDOW = timedelta(minutes=10)
 _MEMBER_LOGIN_MAX_FAILURES = 8
+_ADMIN_LOGIN_FAILURES = {}
+_ADMIN_LOGIN_WINDOW = timedelta(minutes=15)
+_ADMIN_LOGIN_MAX_FAILURES = 5
 
 
 def _member_login_client_key(request: Request):
-    forwarded = (request.headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
-    if forwarded:
-        return forwarded
     return request.client.host if request.client else "unknown"
 
 
@@ -536,6 +601,29 @@ def _record_member_login_failure(request: Request):
 
 def _clear_member_login_failures(request: Request):
     _MEMBER_LOGIN_FAILURES.pop(_member_login_client_key(request), None)
+
+
+def _admin_login_blocked(request: Request):
+    key = _member_login_client_key(request)
+    cutoff = datetime.utcnow() - _ADMIN_LOGIN_WINDOW
+    attempts = [ts for ts in _ADMIN_LOGIN_FAILURES.get(key, []) if ts >= cutoff]
+    if attempts:
+        _ADMIN_LOGIN_FAILURES[key] = attempts
+    else:
+        _ADMIN_LOGIN_FAILURES.pop(key, None)
+    return len(attempts) >= _ADMIN_LOGIN_MAX_FAILURES
+
+
+def _record_admin_login_failure(request: Request):
+    key = _member_login_client_key(request)
+    cutoff = datetime.utcnow() - _ADMIN_LOGIN_WINDOW
+    attempts = [ts for ts in _ADMIN_LOGIN_FAILURES.get(key, []) if ts >= cutoff]
+    attempts.append(datetime.utcnow())
+    _ADMIN_LOGIN_FAILURES[key] = attempts
+
+
+def _clear_admin_login_failures(request: Request):
+    _ADMIN_LOGIN_FAILURES.pop(_member_login_client_key(request), None)
 
 
 def parse_optional_date(value: str):
@@ -569,12 +657,16 @@ async def image_to_data_url(upload: Optional[UploadFile]):
     if len(raw) > 8 * 1024 * 1024:
         raise HTTPException(400, "La fotografía no puede exceder 8 MB.")
     try:
-        img = Image.open(io.BytesIO(raw)).convert("RGB")
-        img = ImageOps.exif_transpose(img)
+        img = Image.open(io.BytesIO(raw))
+        if img.width <= 0 or img.height <= 0 or (img.width * img.height) > 25_000_000:
+            raise HTTPException(400, "La fotografía excede las dimensiones permitidas.")
+        img = ImageOps.exif_transpose(img).convert("RGB")
         img.thumbnail((700, 700))
         out = io.BytesIO()
         img.save(out, format="JPEG", quality=82, optimize=True)
         return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode("ascii")
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(400, "La fotografía debe ser una imagen válida JPG, PNG o similar.")
 
@@ -683,24 +775,45 @@ def root(request: Request, db: Session = Depends(get_db)):
         return RedirectResponse("/admin" if u.role == "admin" else "/mi-cuenta", 303)
     if member_from_session(request, db):
         return RedirectResponse("/mi-cuenta", 303)
-    return templates.TemplateResponse("login.html", {"request": request})
+    return templates.TemplateResponse(request, "login.html", {"request": request})
 
 
 @app.post("/login")
 def login(request: Request, email: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
-    user = db.query(User).filter(func.lower(User.email) == email.strip().lower()).first()
+    if _admin_login_blocked(request):
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"request": request, "error": "Demasiados intentos. Espera unos minutos e inténtalo de nuevo."},
+            status_code=429,
+        )
+    user = db.query(User).filter(
+        func.lower(User.email) == (email or "").strip().lower(),
+        User.role == "admin",
+    ).first()
     if not user or not user.active or not verify_password(password, user.password_hash):
-        return templates.TemplateResponse("login.html", {"request": request, "error": "Correo o contraseña incorrectos."}, status_code=400)
+        _record_admin_login_failure(request)
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"request": request, "error": "Correo o contraseña incorrectos."},
+            status_code=400,
+        )
+
+    _clear_admin_login_failures(request)
+    if password_needs_rehash(user.password_hash):
+        user.password_hash = hash_password(password)
+        db.commit()
+
     request.session.clear()
     request.session["user_id"] = user.id
-    return RedirectResponse("/admin" if user.role == "admin" else "/mi-cuenta", 303)
+    return RedirectResponse("/admin", 303)
 
 
 @app.post("/acceso-socio")
 def member_number_login(request: Request, member_number: str = Form(...), db: Session = Depends(get_db)):
     if _member_login_blocked(request):
-        return templates.TemplateResponse(
-            "login.html",
+        return templates.TemplateResponse(request, "login.html",
             {"request": request, "member_error": "Demasiados intentos. Espera unos minutos e inténtalo de nuevo."},
             status_code=429,
         )
@@ -709,8 +822,7 @@ def member_number_login(request: Request, member_number: str = Form(...), db: Se
     member = db.query(Member).filter(func.lower(Member.member_number) == number.lower()).first() if number else None
     if not member or not member.active:
         _record_member_login_failure(request)
-        return templates.TemplateResponse(
-            "login.html",
+        return templates.TemplateResponse(request, "login.html",
             {"request": request, "member_error": "No fue posible validar ese número de socio."},
             status_code=400,
         )
@@ -744,7 +856,7 @@ def admin_dashboard(request: Request, db: Session = Depends(get_db)):
     )
     income = round(sum(income_map.values()), 2)
     total_debt = round(sum(debt_map.values()), 2)
-    return templates.TemplateResponse("admin_dashboard.html", {
+    return templates.TemplateResponse(request, "admin_dashboard.html", {
         "request": request, "members": members, "status_fn": member_status, "latest_fn": latest_membership,
         "total": len(members), "active": active, "suspended": suspended, "expiring": 0, "expired": 0, "income": income,
         "debt_map": debt_map, "total_debt": total_debt,
@@ -757,7 +869,7 @@ def admin_dashboard(request: Request, db: Session = Depends(get_db)):
 @app.get("/admin/socios/nuevo", response_class=HTMLResponse)
 def new_member_form(request: Request, db: Session = Depends(get_db)):
     require_admin(request, db)
-    return templates.TemplateResponse("member_form.html", {"request": request})
+    return templates.TemplateResponse(request, "member_form.html", {"request": request})
 
 
 @app.post("/admin/socios/nuevo")
@@ -767,7 +879,7 @@ async def create_member(
     address: str = Form(""), emergency_contact: str = Form(""), notes: str = Form(""),
     member_type: str = Form("Regular"),
     membership_type: str = Form("Permanente"), start_date: str = Form(""), end_date: str = Form(""),
-    amount: float = Form(0), password: str = Form("Socio123!"),
+    amount: float = Form(0),
     spouse_name: str = Form(""), spouse_birth_date: str = Form(""),
     child1_name: str = Form(""), child1_birth_date: str = Form(""), child2_name: str = Form(""), child2_birth_date: str = Form(""),
     child3_name: str = Form(""), child3_birth_date: str = Form(""), child4_name: str = Form(""), child4_birth_date: str = Form(""),
@@ -778,11 +890,11 @@ async def create_member(
 ):
     require_admin(request, db)
     if db.query(Member).filter(func.lower(Member.email)==email.strip().lower()).first():
-        return templates.TemplateResponse("member_form.html", {"request": request, "error": "Ese correo ya está registrado."}, status_code=400)
+        return templates.TemplateResponse(request, "member_form.html", {"request": request, "error": "Ese correo ya está registrado."}, status_code=400)
     next_id = (db.query(func.max(Member.id)).scalar() or 0) + 1
     number = member_number.strip() or f"SOC-{next_id:05d}"
     if db.query(Member).filter(func.lower(Member.member_number)==number.lower()).first():
-        return templates.TemplateResponse("member_form.html", {"request": request, "error": "Ese número interno de socio ya está registrado."}, status_code=400)
+        return templates.TemplateResponse(request, "member_form.html", {"request": request, "error": "Ese número interno de socio ya está registrado."}, status_code=400)
     m = Member(member_number=number, first_name=first_name.strip(), last_name=last_name.strip(), email=email.strip().lower(), phone=phone.strip(), birth_date=parse_optional_date(birth_date), address=address.strip(), emergency_contact=emergency_contact.strip(), notes=notes.strip(), qr_token=secrets.token_urlsafe(24))
     db.add(m); db.flush()
     set_member_billing_type(db, m.id, member_type)
@@ -792,7 +904,6 @@ async def create_member(
         db.add(MemberPhoto(member_id=m.id, data=member_photo_data))
     join_date = parse_optional_date(start_date) or date.today()
     db.add(Membership(member_id=m.id, membership_type="Permanente", start_date=join_date, end_date=date(2099, 12, 31), amount=0))
-    db.add(User(email=m.email, password_hash=hash_password(password), role="member", member_id=m.id, active=True))
     await upsert_family_slot(db, m, "Esposa", spouse_name, spouse_birth_date, spouse_photo)
     await upsert_family_slot(db, m, "Hijo 1", child1_name, child1_birth_date, child1_photo)
     await upsert_family_slot(db, m, "Hijo 2", child2_name, child2_birth_date, child2_photo)
@@ -815,7 +926,7 @@ def member_detail(member_id: int, request: Request, db: Session = Depends(get_db
     family = db.query(FamilyMember).filter(FamilyMember.member_id == m.id, FamilyMember.active == True).order_by(FamilyMember.id).all()
     family_by_type = {f.relationship_type: f for f in family}
     dues_payment_id = request.query_params.get("cuota_pago")
-    return templates.TemplateResponse("member_detail.html", {
+    return templates.TemplateResponse(request, "member_detail.html", {
         "request": request, "m": m, "status": member_status(m), "latest": latest_membership(m),
         "pool": pool_status(m), "family_slot": get_family_slot,
         "family": family, "family_by_type": family_by_type,
@@ -1255,7 +1366,7 @@ def toggle_member(member_id: int, request: Request, db: Session = Depends(get_db
 def my_account(request: Request, db: Session = Depends(get_db)):
     m = require_member_record(request, db)
     sync_finances(db)
-    return templates.TemplateResponse("member_portal.html", {"request": request, "m": m, "status": member_status(m), "latest": latest_membership(m), "pool": pool_status(m), "debt_total": member_debt_total(db, m.id), "member_type": member_billing_type(db, m.id), "member_monthly_fee": member_monthly_fee(db, m.id)})
+    return templates.TemplateResponse(request, "member_portal.html", {"request": request, "m": m, "status": member_status(m), "latest": latest_membership(m), "pool": pool_status(m), "debt_total": member_debt_total(db, m.id), "member_type": member_billing_type(db, m.id), "member_monthly_fee": member_monthly_fee(db, m.id)})
 
 
 @app.get("/admin/finanzas", response_class=HTMLResponse)
@@ -1278,7 +1389,7 @@ def finance_dashboard(request: Request, db: Session = Depends(get_db)):
     income_all = income_breakdown(db)
     held_guarantees, retained_guarantees = guarantee_balances(db)
 
-    return templates.TemplateResponse("finance_dashboard.html", {
+    return templates.TemplateResponse(request, "finance_dashboard.html", {
         "request": request,
         "monthly_fee": monthly_fee_amount(db, "Regular"),
         "monthly_fee_pensionado": monthly_fee_amount(db, "Pensionado"),
@@ -1320,7 +1431,7 @@ def member_debt_page(member_id: int, request: Request, db: Session = Depends(get
     monthly = db.query(MonthlyCharge).filter(MonthlyCharge.member_id == m.id).order_by(MonthlyCharge.period.desc()).all()
     manual = db.query(ManualDebt).filter(ManualDebt.member_id == m.id).order_by(ManualDebt.created_at.desc()).all()
     payment_id = request.query_params.get("pago")
-    return templates.TemplateResponse("member_debt.html", {
+    return templates.TemplateResponse(request, "member_debt.html", {
         "request": request,
         "m": m,
         "monthly": monthly,
@@ -1416,14 +1527,14 @@ def my_debt(request: Request, db: Session = Depends(get_db)):
     m = require_member_record(request, db); sync_finances(db)
     monthly = db.query(MonthlyCharge).filter(MonthlyCharge.member_id == m.id).order_by(MonthlyCharge.period.desc()).all()
     manual = db.query(ManualDebt).filter(ManualDebt.member_id == m.id).order_by(ManualDebt.created_at.desc()).all()
-    return templates.TemplateResponse("my_debt.html", {"request": request, "m": m, "monthly": monthly, "manual": manual, "balance": member_debt_total(db, m.id), "monthly_balance": monthly_charge_balance, "manual_balance": manual_debt_balance, "period_label": period_label, "member_type": member_billing_type(db, m.id), "member_monthly_fee": member_monthly_fee(db, m.id)})
+    return templates.TemplateResponse(request, "my_debt.html", {"request": request, "m": m, "monthly": monthly, "manual": manual, "balance": member_debt_total(db, m.id), "monthly_balance": monthly_charge_balance, "manual_balance": manual_debt_balance, "period_label": period_label, "member_type": member_billing_type(db, m.id), "member_monthly_fee": member_monthly_fee(db, m.id)})
 
 
 @app.get("/verificar/{token}", response_class=HTMLResponse)
 def verify_credential(token: str, request: Request, db: Session = Depends(get_db)):
     m = db.query(Member).filter(Member.qr_token==token).first()
-    if not m: return templates.TemplateResponse("verify.html", {"request": request, "valid": False}, status_code=404)
-    return templates.TemplateResponse("verify.html", {"request": request, "valid": True, "m": m, "status": member_status(m), "latest": latest_membership(m)})
+    if not m: return templates.TemplateResponse(request, "verify.html", {"request": request, "valid": False}, status_code=404)
+    return templates.TemplateResponse(request, "verify.html", {"request": request, "valid": True, "m": m, "status": member_status(m), "latest": latest_membership(m)})
 
 
 @app.get("/verificar-alberca/{kind}/{token}", response_class=HTMLResponse)
@@ -1435,9 +1546,9 @@ def verify_pool_credential(kind: str, token: str, request: Request, db: Session 
     elif kind == "f":
         f = db.query(FamilyMember).filter(FamilyMember.qr_token == token, FamilyMember.active == True).first()
         if f: member = f.member; person_name = f.full_name; relation = f.relationship_type
-    if not member: return templates.TemplateResponse("verify_pool.html", {"request": request, "valid": False}, status_code=404)
+    if not member: return templates.TemplateResponse(request, "verify_pool.html", {"request": request, "valid": False}, status_code=404)
     status, css, p = pool_status(member); valid = status in ("Activo", "Por vencer")
-    return templates.TemplateResponse("verify_pool.html", {"request": request, "valid": valid, "person_name": person_name, "relation": relation, "m": member, "pool_status": (status, css), "pool_pass": p})
+    return templates.TemplateResponse(request, "verify_pool.html", {"request": request, "valid": valid, "person_name": person_name, "relation": relation, "m": member, "pool_status": (status, css), "pool_pass": p})
 
 
 @app.get("/qr/{token}.png")
