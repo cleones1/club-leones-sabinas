@@ -13,6 +13,8 @@ jobs:
     env:
       SESSION_SECRET: test-only-session-secret-0123456789abcdefghijklmnopqrstuvwxyz
       DATABASE_URL: sqlite:///./security-smoke.db
+      ADMIN_EMAIL: security-admin@example.com
+      ADMIN_PASSWORD: TestSecurityPassword-2026!
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -51,4 +53,23 @@ jobs:
 
               assert client.get("/docs").status_code == 404
               assert client.get("/openapi.json").status_code == 404
+
+              login = client.post(
+                  "/login",
+                  data={"email": "security-admin@example.com", "password": "TestSecurityPassword-2026!"},
+                  headers={"Origin": "https://club-leones-sabinas.onrender.com"},
+                  follow_redirects=False,
+              )
+              assert login.status_code == 303
+              for path in (
+                  "/admin",
+                  "/admin/configuracion",
+                  "/admin/precios",
+                  "/admin/corte-dia",
+                  "/admin/rentas-publico",
+                  "/admin/importar-socios",
+                  "/admin/correccion-pagos",
+              ):
+                  response = client.get(path)
+                  assert response.status_code == 200, (path, response.status_code)
           PY
