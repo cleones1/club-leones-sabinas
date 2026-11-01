@@ -21,7 +21,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements.txt
-      - run: pip install httpx2
+      - run: pip install httpx2 pip-audit
+      - run: pip-audit -r requirements.txt
       - run: python -m compileall -q app
       - name: Application smoke tests
         run: |
