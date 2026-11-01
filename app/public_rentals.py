@@ -100,7 +100,7 @@ def render_page(request: Request, db: Session, error: str = ""):
     for r in rentals:
         if r.deposit_status == "En resguardo":
             held_deposits += deposit_paid(db, r)
-    return templates.TemplateResponse("public_rentals.html", {
+    return templates.TemplateResponse(request, "public_rentals.html", {
         "request":request,"halls":halls,"rows":rental_rows(db, rentals),"active_count":active,
         "rental_income":round(float(rental_income),2),"held_deposits":round(float(held_deposits),2),
         "cancelled_public_ids":cancelled,

@@ -99,7 +99,7 @@ def _items_with_values(db: Session, definitions):
 def prices_page(request: Request, db: Session = Depends(get_db)):
     require_admin(request, db)
     ensure_price_settings(db)
-    return templates.TemplateResponse("admin_prices.html", {
+    return templates.TemplateResponse(request, "admin_prices.html", {
         "request": request,
         "rentals": _items_with_values(db, RENTAL_PRICES),
         "sales": _items_with_values(db, SALE_PRICES),

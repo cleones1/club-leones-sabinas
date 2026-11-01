@@ -114,7 +114,7 @@ def render_page(request: Request, db: Session):
         "admin":admins.get(a.admin_user_id, f"Admin #{a.admin_user_id}" if a.admin_user_id else "Administrador"),
     } for a in audits[:150]]
 
-    return templates.TemplateResponse("payment_corrections.html", {
+    return templates.TemplateResponse(request, "payment_corrections.html", {
         "request":request,"rows":rows[:500],"history":history,"q":request.query_params.get("q",""),
         "fecha":date_query,"saved":request.query_params.get("guardado")=="1",
         "cancelled_ok":request.query_params.get("anulado")=="1",
