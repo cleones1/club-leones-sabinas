@@ -19,6 +19,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements.txt
+      - run: pip install httpx2
       - run: python -m compileall -q app
       - name: Application smoke tests
         run: |
