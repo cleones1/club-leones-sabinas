@@ -1,0 +1,30 @@
+name: Snapshot source backup 2026-11-01
+
+on:
+  push:
+    branches: [backup-2026-11-01]
+    paths:
+      - '.github/workflows/source-backup-2026-11-01.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: d2612f63206373b32554e41478b1b353a38fc285
+      - name: Package exact production source
+        shell: bash
+        run: |
+          rm -rf .git
+          zip -r Club_Leones_Sabinas_Source_d2612f63.zip .             -x 'Club_Leones_Sabinas_Source_d2612f63.zip'
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: club-leones-source-d2612f63
+          path: Club_Leones_Sabinas_Source_d2612f63.zip
+          retention-days: 1
+          if-no-files-found: error
